@@ -1,0 +1,12 @@
+# Akela runtime cache (generated per run, not source of truth)
+akela/runs/
+.akela/
+
+# Common
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+node_modules/
+.env
+akela/.cache/

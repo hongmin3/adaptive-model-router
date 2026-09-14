@@ -1,0 +1,136 @@
+{
+  "version": 1,
+  "defaults": {
+    "score": 5,
+    "profile": "BALANCED",
+    "reasoning": "MEDIUM",
+    "confidence_threshold": 0.75,
+    "uncertain_profile": "BALANCED",
+    "uncertain_reasoning": "MEDIUM"
+  },
+  "thresholds": {
+    "low_max": 4,
+    "medium_max": 8,
+    "high_max": 14
+  },
+  "reasoning_order": ["low", "medium", "high", "xhigh", "max", "ultra"],
+  "directives": {
+    "keep_current_model": ["이 모델 그대로", "현재 모델 유지", "모델 바꾸지 마", "keep current model"],
+    "reasoning": {
+      "LOW": ["reasoning low", "low로 해", "사용량 아껴", "빠르게 해"],
+      "MEDIUM": ["reasoning medium", "medium으로 해", "medium으로 실행"],
+      "HIGH": ["reasoning high", "high로 해", "정확도가 제일 중요"],
+      "XHIGH": ["reasoning xhigh", "xhigh로 해"]
+    }
+  },
+  "rules": [
+    {
+      "id": "narrow_simple_edit",
+      "label": "narrow simple edit",
+      "score": -4,
+      "all_of": [
+        ["오타", "문구", "한 줄", "한줄", "파일명", "변수명", "번역", "markdown", "readme", "문자열 검색", "명령 실행"],
+        ["수정", "변경", "추가", "정리", "바꿔", "번역", "검색", "실행"]
+      ],
+      "none_of": ["프로젝트 전체", "전체 구조", "모든 파일", "전수", "대규모", "여러 모듈", "근본 원인"]
+    },
+    {
+      "id": "normal_implementation",
+      "label": "general implementation",
+      "score": 1,
+      "any_of": ["기능 구현", "기능 추가", "python 자동화", "shell script", "shell 스크립트", "api 연동", "테스트 코드", "데이터 가공", "설정 변경"]
+    },
+    {
+      "id": "multiple_files",
+      "label": "multiple files",
+      "score": 2,
+      "any_of": ["여러 파일", "다중 파일", "복수 파일", "multiple files"]
+    },
+    {
+      "id": "project_wide_analysis",
+      "label": "project-wide analysis",
+      "score": 3,
+      "all_of": [
+        ["프로젝트 전체", "전체 프로젝트", "전체 코드베이스", "전체 구조", "모든 파일", "전수"],
+        ["분석", "확인", "검토", "개선", "리팩터링", "refactor"]
+      ]
+    },
+    {
+      "id": "architecture_work",
+      "label": "architecture or refactoring work",
+      "score": 3,
+      "all_of": [
+        ["architecture", "아키텍처", "구조", "refactoring", "리팩터링", "설계"],
+        ["분석", "개선", "재설계", "검토", "리팩터링", "refactor", "문제점"]
+      ],
+      "none_of": ["readme에", "readme 안", "문서에", "단어", "문구", "한 줄", "한줄"]
+    },
+    {
+      "id": "complex_debugging",
+      "label": "complex debugging",
+      "score": 4,
+      "any_of": ["근본 원인", "원인 불명", "복잡한 버그", "race condition", "concurrency", "synchronization", "교착", "deadlock", "성능 병목"]
+    },
+    {
+      "id": "multi_module_dependency",
+      "label": "multiple modules or dependency analysis",
+      "score": 2,
+      "any_of": ["여러 모듈", "모듈 간", "의존성 분석", "dependency analysis", "side effect", "사이드 이펙트"]
+    },
+    {
+      "id": "analysis_and_implementation",
+      "label": "analysis and implementation",
+      "score": 2,
+      "all_of": [
+        ["분석", "원인", "검토", "확인"],
+        ["수정", "구현", "개선", "적용", "리팩터링"]
+      ]
+    },
+    {
+      "id": "verification_required",
+      "label": "testing or verification required",
+      "score": 1,
+      "any_of": ["테스트", "검증", "빌드", "lint", "린트", "type check", "타입 검사"]
+    },
+    {
+      "id": "high_impact_operation",
+      "label": "high-impact operation",
+      "score": 9,
+      "risk_floor": "HIGH",
+      "any_of": ["db migration", "database migration", "스키마 마이그레이션", "production config", "운영 설정", "대량 삭제", "권한 변경", "인증 변경", "보안 코드", "security", "destructive"]
+    }
+  ],
+  "model_selection": {
+    "fallback_profiles": {
+      "FAST": ["BALANCED", "STRONG", "MAX"],
+      "BALANCED": ["STRONG", "FAST", "MAX"],
+      "STRONG": ["BALANCED", "MAX", "FAST"],
+      "MAX": ["STRONG", "BALANCED", "FAST"]
+    },
+    "description_hints": {
+      "FAST": ["fast", "affordable", "low latency", "cost-effective"],
+      "BALANCED": ["balanced", "everyday", "workhorse"],
+      "STRONG": ["reliable", "complex", "demanding"],
+      "MAX": ["most capable", "hardest"]
+    }
+  },
+  "providers": {
+    "codex": {
+      "label": "Codex",
+      "reasoning_label": "Reasoning"
+    },
+    "claude": {
+      "label": "Claude Code",
+      "reasoning_label": "Effort",
+      "verified_alias_families": {
+        "haiku": {"profile": "FAST", "description": "fast affordable"},
+        "sonnet": {"profile": "BALANCED", "description": "balanced everyday"},
+        "opus": {"profile": "STRONG", "description": "reliable complex demanding"}
+      }
+    }
+  },
+  "ai_fallback": {
+    "enabled": false,
+    "policy": "Never call an LLM for routing. Low-confidence results use BALANCED/MEDIUM."
+  }
+}
