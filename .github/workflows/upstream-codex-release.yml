@@ -103,6 +103,12 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "Adaptive Codex for $UPSTREAM_TAG" \
             --notes "Patched from the official OpenAI Codex release $UPSTREAM_TAG. The router itself performs zero LLM calls."
+          gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "Codex upstream update needs patch maintenance: $UPSTREAM_TAG in:title" \
+            --json number --jq '.[].number' | while read -r number; do
+              gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+                --comment "Automatic patch, test, build, and release succeeded for $UPSTREAM_TAG."
+            done
 
   notify-failure:
     needs: [resolve, build]
