@@ -77,7 +77,7 @@ py -m pip install .
 
 ### 2. 자동 빌드된 Codex 설치
 
-최신 Windows 빌드를 내려받고 SHA-256을 검증한 후 `%LOCALAPPDATA%\AdaptiveModelRouter\bin\codex.exe`에 설치합니다.
+최신 Windows 빌드를 내려받고 SHA-256을 검증한 후 `%LOCALAPPDATA%\AdaptiveModelRouter`에 설치합니다. 패치된 `codex.exe`뿐 아니라 공식 배포판과 같은 Code Mode host, Ripgrep, Windows sandbox helper도 함께 설치합니다.
 
 ```powershell
 py .\scripts\manage_native_codex.py --install-latest

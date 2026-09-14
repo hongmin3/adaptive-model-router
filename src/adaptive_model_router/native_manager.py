@@ -20,6 +20,18 @@ from .config import PACKAGED_CONFIG, user_config_path
 REPOSITORY = "hongmin3/adaptive-model-router"
 ASSET_NAME = "adaptive-model-router-codex-windows-x64.zip"
 TASK_NAME = "AdaptiveModelRouterUpdate"
+ARCHIVE_TARGETS = {
+    "codex.exe": Path("bin/codex.exe"),
+    "bin/codex.exe": Path("bin/codex.exe"),
+    "codex-code-mode-host.exe": Path("bin/codex-code-mode-host.exe"),
+    "bin/codex-code-mode-host.exe": Path("bin/codex-code-mode-host.exe"),
+    "rg.exe": Path("codex-path/rg.exe"),
+    "codex-path/rg.exe": Path("codex-path/rg.exe"),
+    "codex-command-runner.exe": Path("codex-resources/codex-command-runner.exe"),
+    "codex-resources/codex-command-runner.exe": Path("codex-resources/codex-command-runner.exe"),
+    "codex-windows-sandbox-setup.exe": Path("codex-resources/codex-windows-sandbox-setup.exe"),
+    "codex-resources/codex-windows-sandbox-setup.exe": Path("codex-resources/codex-windows-sandbox-setup.exe"),
+}
 
 
 def install_root() -> Path:
@@ -94,29 +106,51 @@ def _prepend_user_path(path: Path) -> None:
     os.environ["PATH"] = os.pathsep.join([target, os.environ.get("PATH", "")])
 
 
-def install_archive(archive: Path, version: str) -> Path:
+def install_archive(
+    archive: Path,
+    version: str,
+    *,
+    release_asset_digest: str | None = None,
+) -> Path:
     root = install_root()
-    bin_dir = root / "bin"
     backup_dir = root / "backups" / datetime.now().strftime("%Y%m%d-%H%M%S")
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    destination = bin_dir / "codex.exe"
-    if destination.exists():
-        backup_dir.mkdir(parents=True, exist_ok=False)
-        shutil.copy2(destination, backup_dir / destination.name)
+    installed_files: list[Path] = []
     with zipfile.ZipFile(archive) as bundle:
-        member = next((name for name in bundle.namelist() if Path(name).name == "codex.exe"), None)
-        if member is None:
+        members: dict[Path, str] = {}
+        for name in bundle.namelist():
+            normalized = name.replace("\\", "/").lstrip("./")
+            target = ARCHIVE_TARGETS.get(normalized.casefold())
+            if target is not None:
+                members[target] = name
+        if Path("bin/codex.exe") not in members:
             raise RuntimeError("Archive does not contain codex.exe")
-        with bundle.open(member) as source:
+        for relative, member in members.items():
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                backup = backup_dir / relative
+                backup.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(destination, backup)
             temporary = destination.with_suffix(".tmp")
-            with temporary.open("wb") as target:
+            with bundle.open(member) as source, temporary.open("wb") as target:
                 shutil.copyfileobj(source, target)
             temporary.replace(destination)
+            installed_files.append(relative)
+    destination = root / "bin" / "codex.exe"
     (root / "installed.json").write_text(
-        json.dumps({"version": version, "sha256": _sha256(destination)}, indent=2) + "\n",
+        json.dumps(
+            {
+                "version": version,
+                "release_asset_digest": release_asset_digest,
+                "sha256": _sha256(destination),
+                "files": [str(path).replace("\\", "/") for path in installed_files],
+            },
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
-    _prepend_user_path(bin_dir)
+    _prepend_user_path(root / "bin")
     ensure_user_config()
     return destination
 
@@ -124,10 +158,13 @@ def install_archive(archive: Path, version: str) -> Path:
 def install_latest() -> tuple[Path | None, str]:
     release = latest_release()
     version = str(release["tag_name"])
-    state_path = install_root() / "installed.json"
-    if state_path.exists() and json.loads(state_path.read_text(encoding="utf-8")).get("version") == version:
-        return None, version
     asset = _asset(release, ASSET_NAME)
+    release_asset_digest = str(asset.get("digest") or asset.get("id") or "")
+    state_path = install_root() / "installed.json"
+    if state_path.exists():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        if state.get("version") == version and state.get("release_asset_digest") == release_asset_digest:
+            return None, version
     checksum_asset = _asset(release, ASSET_NAME + ".sha256")
     with tempfile.TemporaryDirectory(prefix="adaptive-model-router-") as temp:
         archive = Path(temp) / ASSET_NAME
@@ -138,7 +175,11 @@ def install_latest() -> tuple[Path | None, str]:
         actual = _sha256(archive).casefold()
         if actual != expected:
             raise RuntimeError("Release checksum verification failed")
-        return install_archive(archive, version), version
+        return install_archive(
+            archive,
+            version,
+            release_asset_digest=release_asset_digest,
+        ), version
 
 
 def install_update_task() -> None:

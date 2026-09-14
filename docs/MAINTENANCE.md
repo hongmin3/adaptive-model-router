@@ -6,8 +6,9 @@
 2. 대응하는 `adaptive-<official-tag>` Release가 없으면 공식 소스를 clone한다.
 3. `codex-patches/adaptive-router.patch`를 check 후 적용한다.
 4. Python Router test와 Windows Rust release build를 실행한다.
-5. 성공한 경우에만 zip과 SHA-256을 public Release로 발행한다.
-6. PC의 `AdaptiveModelRouterUpdate` 작업이 새 Release를 검증하고 설치한다.
+5. 같은 버전의 공식 Windows 런타임에서 Code Mode host, Ripgrep, sandbox helper를 가져와 패치된 `codex.exe`와 묶는다.
+6. 성공한 경우에만 zip과 SHA-256을 public Release로 발행한다.
+7. PC의 `AdaptiveModelRouterUpdate` 작업이 새 Release asset digest를 비교하고 변경된 빌드를 검증·설치한다.
 
 ## 충돌 발생 시
 
@@ -36,7 +37,7 @@ git -C upstream-codex apply --3way .\codex-patches\adaptive-router.patch
 - Router/Python 오류에서 Codex가 fail-open 하는지 확인
 - zip checksum과 설치 후 `codex --version` 확인
 
-검증 후 patch를 갱신하고 Workflow를 `upstream_tag` 입력과 함께 재실행한 다음 자동 생성 Issue를 닫는다.
+검증 후 patch를 갱신하고 Workflow를 `upstream_tag` 입력과 함께 재실행한 다음 자동 생성 Issue를 닫는다. 같은 upstream tag의 자산을 다시 만들 때는 `force_rebuild`를 활성화한다.
 
 ## Rollback
 

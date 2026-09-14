@@ -27,16 +27,21 @@ class NativeManagerTests(unittest.TestCase):
             root = Path(temp) / "install"
             archive = Path(temp) / "bundle.zip"
             with zipfile.ZipFile(archive, "w") as bundle:
-                bundle.writestr("codex.exe", b"test-binary")
+                bundle.writestr("bin/codex.exe", b"test-binary")
+                bundle.writestr("bin/codex-code-mode-host.exe", b"host")
+                bundle.writestr("codex-path/rg.exe", b"rg")
+                bundle.writestr("codex-resources/codex-command-runner.exe", b"runner")
+                bundle.writestr("codex-resources/codex-windows-sandbox-setup.exe", b"setup")
             with patch.dict(os.environ, {"ADAPTIVE_MODEL_ROUTER_INSTALL_DIR": str(root)}), patch(
                 "adaptive_model_router.native_manager._prepend_user_path"
             ):
                 installed = install_archive(archive, "router-v1")
             self.assertEqual(installed.read_bytes(), b"test-binary")
-            self.assertEqual(
-                json.loads((root / "installed.json").read_text(encoding="utf-8"))["version"],
-                "router-v1",
-            )
+            state = json.loads((root / "installed.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["version"], "router-v1")
+            self.assertEqual(len(state["files"]), 5)
+            self.assertEqual((root / "bin" / "codex-code-mode-host.exe").read_bytes(), b"host")
+            self.assertEqual((root / "codex-path" / "rg.exe").read_bytes(), b"rg")
 
 
 if __name__ == "__main__":
