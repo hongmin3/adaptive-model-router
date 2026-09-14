@@ -1,0 +1,219 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Adaptive Model Router <noreply@local>
+Date: Mon, 14 Sep 2026 11:30:04 +0900
+Subject: [PATCH] feat(tui): confirm local adaptive model routing
+
+---
+ codex-rs/tui/src/chatwidget.rs                |  26 ++++
+ codex-rs/tui/src/chatwidget/constructor.rs    |   2 +
+ .../tui/src/chatwidget/input_submission.rs    | 140 ++++++++++++++++++
+ 3 files changed, 168 insertions(+)
+
+diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
+index 16d4a6e..dd663ef 100644
+--- a/codex-rs/tui/src/chatwidget.rs
++++ b/codex-rs/tui/src/chatwidget.rs
+@@ -797,6 +797,32 @@ pub(crate) struct ChatWidget {
+     external_editor_state: ExternalEditorState,
+     last_rendered_user_message_display: Option<UserMessageDisplay>,
+     last_non_retry_error: Option<(String, String)>,
++    /// Prompt held while the local zero-token router waits for Y/N confirmation.
++    pending_adaptive_route: Option<PendingAdaptiveRoute>,
++    /// Prevent recursive submission from being routed a second time after confirmation.
++    adaptive_route_bypass_once: bool,
++}
++
++#[derive(Clone)]
++struct PendingAdaptiveRoute {
++    user_message: UserMessage,
++    history_record: UserMessageHistoryRecord,
++    shell_escape_policy: ShellEscapePolicy,
++    model: String,
++    model_display_name: String,
++    reasoning: ReasoningEffortConfig,
++}
++
++#[derive(serde::Deserialize)]
++struct AdaptiveRouteRecommendation {
++    enabled: bool,
++    model: Option<String>,
++    model_display_name: Option<String>,
++    reasoning: Option<String>,
++    profile: Option<String>,
++    score: Option<i32>,
++    confidence: Option<f64>,
++    reason: Option<String>,
+ }
+ 
+ #[cfg_attr(not(test), allow(dead_code))]
+diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
+index f45ae82..467ec0a 100644
+--- a/codex-rs/tui/src/chatwidget/constructor.rs
++++ b/codex-rs/tui/src/chatwidget/constructor.rs
+@@ -269,6 +269,8 @@ impl ChatWidget {
+             external_editor_state: ExternalEditorState::Closed,
+             last_rendered_user_message_display: None,
+             last_non_retry_error: None,
++            pending_adaptive_route: None,
++            adaptive_route_bypass_once: false,
+         };
+ 
+         widget.prefetch_rate_limits();
+diff --git a/codex-rs/tui/src/chatwidget/input_submission.rs b/codex-rs/tui/src/chatwidget/input_submission.rs
+index 6e408aa..8f1c29b 100644
+--- a/codex-rs/tui/src/chatwidget/input_submission.rs
++++ b/codex-rs/tui/src/chatwidget/input_submission.rs
+@@ -113,6 +113,96 @@ impl ChatWidget {
+         history_record: UserMessageHistoryRecord,
+         shell_escape_policy: ShellEscapePolicy,
+     ) -> (bool, Option<AppCommand>) {
++        if let Some(pending) = self.pending_adaptive_route.take() {
++            match user_message.text.trim().to_ascii_lowercase().as_str() {
++                "y" | "yes" | "" => {
++                    self.set_model(&pending.model);
++                    self.set_reasoning_effort(Some(pending.reasoning.clone()));
++                    self.add_info_message(
++                        format!(
++                            "Adaptive Model Router applied {} / {}. Starting the original task.",
++                            pending.model_display_name,
++                            pending.reasoning.as_str().to_ascii_uppercase()
++                        ),
++                        /*hint*/ None,
++                    );
++                    self.adaptive_route_bypass_once = true;
++                    return self.submit_user_message_with_history_and_shell_escape_policy(
++                        pending.user_message,
++                        pending.history_record,
++                        pending.shell_escape_policy,
++                    );
++                }
++                "n" | "no" => {
++                    self.add_info_message(
++                        "Adaptive Model Router kept the current model. Starting the original task."
++                            .to_string(),
++                        /*hint*/ None,
++                    );
++                    self.adaptive_route_bypass_once = true;
++                    return self.submit_user_message_with_history_and_shell_escape_policy(
++                        pending.user_message,
++                        pending.history_record,
++                        pending.shell_escape_policy,
++                    );
++                }
++                _ => {
++                    self.pending_adaptive_route = Some(pending);
++                    self.add_info_message(
++                        "Adaptive Model Router is waiting for Y or N.".to_string(),
++                        /*hint*/ None,
++                    );
++                    return (false, None);
++                }
++            }
++        }
++
++        if self.adaptive_route_bypass_once {
++            self.adaptive_route_bypass_once = false;
++        } else if !user_message.text.trim().is_empty()
++            && !user_message.text.trim_start().starts_with('/')
++            && !user_message.text.trim_start().starts_with('!')
++            && let Some(recommendation) = self.adaptive_route_recommendation(&user_message.text)
++        {
++            let Some(model) = recommendation.model.clone() else {
++                return (false, None);
++            };
++            let Some(reasoning) = recommendation
++                .reasoning
++                .as_deref()
++                .and_then(Self::adaptive_reasoning_effort)
++            else {
++                return (false, None);
++            };
++            let display_name = recommendation
++                .model_display_name
++                .clone()
++                .unwrap_or_else(|| model.clone());
++            let reason = recommendation
++                .reason
++                .as_deref()
++                .unwrap_or("local rule match");
++            let score = recommendation.score.unwrap_or_default();
++            let confidence = recommendation.confidence.unwrap_or_default();
++            let profile = recommendation.profile.as_deref().unwrap_or("BALANCED");
++            self.add_info_message(
++                format!(
++                    "Adaptive Model Router\n\nRecommended: {display_name}\nReasoning: {}\nProfile: {profile}\nReason: {reason}\nScore: {score} · Confidence: {confidence:.2}\n\n추천 모델로 바꾸시겠습니까? [Y/n]",
++                    reasoning.as_str().to_ascii_uppercase()
++                ),
++                /*hint*/ None,
++            );
++            self.pending_adaptive_route = Some(PendingAdaptiveRoute {
++                user_message,
++                history_record,
++                shell_escape_policy,
++                model,
++                model_display_name: display_name,
++                reasoning,
++            });
++            return (false, None);
++        }
++
+         if self.has_misalignment_policy_violation() {
+             return (false, None);
+         }
+@@ -467,6 +557,56 @@ impl ChatWidget {
+         (true, Some(op))
+     }
+ 
++    fn adaptive_reasoning_effort(value: &str) -> Option<ReasoningEffortConfig> {
++        match value.to_ascii_lowercase().as_str() {
++            "none" => Some(ReasoningEffortConfig::None),
++            "low" => Some(ReasoningEffortConfig::Low),
++            "medium" => Some(ReasoningEffortConfig::Medium),
++            "high" => Some(ReasoningEffortConfig::High),
++            "xhigh" => Some(ReasoningEffortConfig::XHigh),
++            "max" => Some(ReasoningEffortConfig::Max),
++            "ultra" => Some(ReasoningEffortConfig::Ultra),
++            _ => None,
++        }
++    }
++
++    fn adaptive_route_recommendation(&self, prompt: &str) -> Option<AdaptiveRouteRecommendation> {
++        if std::env::var("ADAPTIVE_MODEL_ROUTER_ENABLED")
++            .is_ok_and(|value| matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off"))
++        {
++            return None;
++        }
++
++        let python = std::env::var("ADAPTIVE_MODEL_ROUTER_PYTHON").unwrap_or_else(|_| {
++            if cfg!(windows) {
++                "py".to_string()
++            } else {
++                "python3".to_string()
++            }
++        });
++        let mut child = std::process::Command::new(python)
++            .args(["-m", "adaptive_model_router.native_bridge"])
++            .stdin(std::process::Stdio::piped())
++            .stdout(std::process::Stdio::piped())
++            .stderr(std::process::Stdio::null())
++            .spawn()
++            .ok()?;
++        let request = serde_json::json!({
++            "prompt": prompt,
++            "current_model": self.current_model(),
++        });
++        if let Some(mut stdin) = child.stdin.take() {
++            serde_json::to_writer(&mut stdin, &request).ok()?;
++        }
++        let output = child.wait_with_output().ok()?;
++        if !output.status.success() {
++            return None;
++        }
++        let recommendation: AdaptiveRouteRecommendation =
++            serde_json::from_slice(&output.stdout).ok()?;
++        recommendation.enabled.then_some(recommendation)
++    }
++
+     /// Restore the blocked submission draft without losing mention resolution state.
+     ///
+     /// The blocked-image path intentionally keeps the draft in the composer so

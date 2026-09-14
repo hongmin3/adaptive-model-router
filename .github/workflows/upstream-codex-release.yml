@@ -1,0 +1,120 @@
+name: Build adaptive Codex on upstream release
+
+on:
+  schedule:
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Optional official Codex tag
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      should_build: ${{ steps.resolve.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            tag="$REQUESTED_TAG"
+          else
+            tag="$(gh api repos/openai/codex/releases/latest --jq .tag_name)"
+          fi
+          release_tag="adaptive-${tag}"
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            should_build=false
+          else
+            should_build=true
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      UPSTREAM_TAG: ${{ needs.resolve.outputs.tag }}
+      LIBSQLITE3_FLAGS: SQLITE_DISABLE_INTRINSIC
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Clone official Codex release
+        shell: pwsh
+        run: git clone --depth 1 --branch $env:UPSTREAM_TAG https://github.com/openai/codex.git upstream-codex
+      - name: Apply the adaptive router patch
+        shell: pwsh
+        run: git -C upstream-codex apply --check "$env:GITHUB_WORKSPACE\codex-patches\adaptive-router.patch"; git -C upstream-codex apply "$env:GITHUB_WORKSPACE\codex-patches\adaptive-router.patch"
+      - name: Verify Python router
+        shell: pwsh
+        run: |
+          py -m pip install -e .
+          $env:PYTHONPATH = "$pwd\src;$pwd"
+          py -m unittest discover -s tests -v
+      - name: Build patched Codex
+        working-directory: upstream-codex/codex-rs
+        run: cargo build --release --bin codex
+      - name: Package and checksum
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item upstream-codex\codex-rs\target\release\codex.exe dist\codex.exe
+          Set-Content -LiteralPath dist\UPSTREAM_VERSION.txt -Value $env:UPSTREAM_TAG -Encoding utf8
+          Compress-Archive -Path dist\codex.exe,dist\UPSTREAM_VERSION.txt -DestinationPath adaptive-model-router-codex-windows-x64.zip
+          $hash = (Get-FileHash adaptive-model-router-codex-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath adaptive-model-router-codex-windows-x64.zip.sha256 -Value "$hash  adaptive-model-router-codex-windows-x64.zip" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-codex-${{ needs.resolve.outputs.tag }}
+          path: |
+            adaptive-model-router-codex-windows-x64.zip
+            adaptive-model-router-codex-windows-x64.zip.sha256
+
+  release:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: adaptive-codex-${{ needs.resolve.outputs.tag }}
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            adaptive-model-router-codex-windows-x64.zip \
+            adaptive-model-router-codex-windows-x64.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Adaptive Codex for $UPSTREAM_TAG" \
+            --notes "Patched from the official OpenAI Codex release $UPSTREAM_TAG. The router itself performs zero LLM calls."
+
+  notify-failure:
+    needs: [resolve, build]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          title="Codex upstream update needs patch maintenance: $UPSTREAM_TAG"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq 'length')"
+          if [[ "$existing" == "0" ]]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "The automatic patch/build workflow failed for official Codex release \`$UPSTREAM_TAG\`. Review the failed Actions run, update \`codex-patches/adaptive-router.patch\`, and rerun the workflow."
+          fi

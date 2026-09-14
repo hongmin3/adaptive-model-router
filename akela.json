@@ -9,5 +9,46 @@
   ],
   "learnings": "akela/LEARNINGS.md",
   "runs": ".akela/runs",
-  "compiler": {}
+  "compiler": {
+    "scope": {
+      "REF-project-overview#components": {
+        "add": [
+          "implementation",
+          "provider-support",
+          "routing-debug",
+          "release"
+        ]
+      },
+      "REF-troubleshooting#known-issues": {
+        "add": [
+          "implementation",
+          "provider-support",
+          "routing-debug",
+          "release"
+        ]
+      },
+      "REF-troubleshooting#check-order": {
+        "add": [
+          "implementation",
+          "provider-support",
+          "routing-debug",
+          "release"
+        ]
+      },
+      "REF-workflow#rerun-caveats": {
+        "add": [
+          "implementation",
+          "provider-support",
+          "routing-debug",
+          "release"
+        ]
+      }
+    }
+  },
+  "activities": [
+    "implementation",
+    "provider-support",
+    "routing-debug",
+    "release"
+  ]
 }

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adaptive-model-router"
-version = "0.1.0"
+version = "0.2.0"
 description = "Zero-token rule-first model and reasoning router for local AI CLIs"
 requires-python = ">=3.11"
 dependencies = []
@@ -12,6 +12,9 @@ dependencies = []
 [project.scripts]
 route-ai = "adaptive_model_router.cli:main"
 route-codex = "adaptive_model_router.cli:main"
+manage-native-codex = "adaptive_model_router.native_manager:main"
+adaptive-codex-manager = "adaptive_model_router.native_manager:main"
+adaptive-model-router-bridge = "adaptive_model_router.native_bridge:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
