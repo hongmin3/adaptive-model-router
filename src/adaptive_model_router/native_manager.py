@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .config import PACKAGED_CONFIG, user_config_path
+
 
 REPOSITORY = "hongmin3/adaptive-model-router"
 ASSET_NAME = "adaptive-model-router-codex-windows-x64.zip"
@@ -23,6 +25,14 @@ TASK_NAME = "AdaptiveModelRouterUpdate"
 def install_root() -> Path:
     override = os.environ.get("ADAPTIVE_MODEL_ROUTER_INSTALL_DIR")
     return Path(override) if override else Path(os.environ["LOCALAPPDATA"]) / "AdaptiveModelRouter"
+
+
+def ensure_user_config() -> Path:
+    destination = user_config_path()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not destination.exists():
+        shutil.copy2(PACKAGED_CONFIG, destination)
+    return destination
 
 
 def _github_json(url: str) -> dict[str, Any]:
@@ -107,6 +117,7 @@ def install_archive(archive: Path, version: str) -> Path:
         encoding="utf-8",
     )
     _prepend_user_path(bin_dir)
+    ensure_user_config()
     return destination
 
 
@@ -131,6 +142,7 @@ def install_latest() -> tuple[Path | None, str]:
 
 
 def install_update_task() -> None:
+    ensure_user_config()
     command = f'"{sys.executable}" -m adaptive_model_router.native_manager --install-latest'
     subprocess.run(
         [
@@ -148,7 +160,13 @@ def status() -> dict[str, Any]:
     task = subprocess.run(
         ["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True, text=True, errors="replace"
     )
-    return {"installed": installed, "update_task": task.returncode == 0, "root": str(install_root())}
+    return {
+        "installed": installed,
+        "update_task": task.returncode == 0,
+        "root": str(install_root()),
+        "config": str(user_config_path()),
+        "config_exists": user_config_path().exists(),
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

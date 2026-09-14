@@ -18,3 +18,6 @@ adaptive-model-router-bridge = "adaptive_model_router.native_bridge:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+adaptive_model_router = ["router_config.json"]

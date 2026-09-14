@@ -50,7 +50,7 @@ Router가 실패하면 Codex 자체는 계속 사용할 수 있도록 fail-open�
 
 ## Complexity Score
 
-규칙은 [`router_config.json`](router_config.json)에 분리되어 있습니다.
+규칙 원본은 [`router_config.json`](router_config.json)에 분리되어 있습니다. PC 설치 후 실제 사용자 설정은 `%LOCALAPPDATA%\AdaptiveModelRouter\router_config.json`에 최초 1회 복사되며, 업데이트 시 덮어쓰지 않습니다.
 
 | 점수 | 분류 | 기본 역할 | Reasoning |
 |---:|---|---|---|
@@ -153,7 +153,7 @@ Official release 감지 → clean clone → patch check/apply
 
 ## Debug Mode와 테스트
 
-기본 Debug Mode는 OFF입니다. [`router_config.json`](router_config.json)의 `hook.debug`를 `true`로 바꾸면 점수, Confidence, 매칭 규칙을 표시합니다. 이 출력도 로컬 템플릿이며 LLM을 사용하지 않습니다.
+기본 Debug Mode는 OFF입니다. `%LOCALAPPDATA%\AdaptiveModelRouter\router_config.json`의 `hook.debug`를 `true`로 바꾸면 점수, Confidence, 매칭 규칙을 표시합니다. 이 출력도 로컬 템플릿이며 LLM을 사용하지 않습니다.
 
 ```powershell
 $env:PYTHONPATH = "$PWD\src;$PWD"

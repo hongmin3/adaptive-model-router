@@ -8,10 +8,20 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from adaptive_model_router.native_manager import install_archive
+from adaptive_model_router.native_manager import ensure_user_config, install_archive
 
 
 class NativeManagerTests(unittest.TestCase):
+    def test_user_config_is_created_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            destination = Path(temp) / "router_config.json"
+            with patch("adaptive_model_router.native_manager.user_config_path", return_value=destination):
+                first = ensure_user_config()
+                destination.write_text('{"custom": true}', encoding="utf-8")
+                second = ensure_user_config()
+            self.assertEqual(first, second)
+            self.assertEqual(destination.read_text(encoding="utf-8"), '{"custom": true}')
+
     def test_install_archive_writes_binary_and_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "install"
