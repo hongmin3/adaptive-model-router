@@ -44,7 +44,7 @@ index 16d4a6e..dd663ef 100644
 +    confidence: Option<f64>,
 +    reason: Option<String>,
  }
-
+ 
  #[cfg_attr(not(test), allow(dead_code))]
 diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
 index f45ae82..467ec0a 100644
@@ -57,7 +57,7 @@ index f45ae82..467ec0a 100644
 +            pending_adaptive_route: None,
 +            adaptive_route_bypass_once: false,
          };
-
+ 
          widget.prefetch_rate_limits();
 diff --git a/codex-rs/tui/src/chatwidget/input_submission.rs b/codex-rs/tui/src/chatwidget/input_submission.rs
 index 6e408aa..8f1c29b 100644
@@ -163,7 +163,7 @@ index 6e408aa..8f1c29b 100644
 @@ -467,6 +557,56 @@ impl ChatWidget {
          (true, Some(op))
      }
-
+ 
 +    fn adaptive_reasoning_effort(value: &str) -> Option<ReasoningEffortConfig> {
 +        match value.to_ascii_lowercase().as_str() {
 +            "none" => Some(ReasoningEffortConfig::None),
