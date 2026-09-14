@@ -12,4 +12,3 @@ Adaptive Model Router는 별도 LLM 호출 없이 사용자 Prompt를 로컬 규
 - `src/adaptive_model_router/selector.py`: Provider 내부 모델과 지원 Reasoning 단계를 선택한다.
 - `src/adaptive_model_router/cli.py`: 추천 출력, 승인, 실제 CLI 실행을 담당한다.
 - `tests/`: 문맥 경계, 위험 작업, 한도, Reasoning 지원 여부를 검증한다.
-

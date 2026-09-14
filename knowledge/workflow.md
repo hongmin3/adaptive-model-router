@@ -7,4 +7,3 @@ User Prompt → 로컬 Complexity Score → Confidence 및 위험 floor → 현�
 <!-- akela: id=rerun-caveats scope=all tier=should -->
 
 각 Prompt는 이전 요청의 난이도와 무관하게 새로 평가한다. CLI 모델 카탈로그는 실행 시마다 읽고, 확인되지 않은 한도나 reset time은 추측하지 않는다. Provider 실패 시 다른 Provider로 전환하지 않는다.
-

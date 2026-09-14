@@ -11,4 +11,3 @@ CLI가 계정별 사용량 상태를 기계 판독 가능한 형태로 제공하
 3. `router_config.json`의 임계값과 문맥 조건을 확인한다.
 4. 모델 목록이 UNKNOWN이면 해당 CLI의 로컬 catalog/help 출력이 현재 버전에서 제공되는지 확인한다.
 5. `py -m unittest discover -s tests -v`로 회귀 테스트를 실행한다.
-

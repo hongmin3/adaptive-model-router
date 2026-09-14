@@ -12,4 +12,3 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
     config_path = path or DEFAULT_CONFIG
     with config_path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
-
