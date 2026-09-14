@@ -72,7 +72,7 @@ Router가 실패하면 Codex 자체는 계속 사용할 수 있도록 fail-open�
 ```powershell
 git clone https://github.com/hongmin3/adaptive-model-router.git
 cd adaptive-model-router
-py -m pip install -e .
+py -m pip install .
 ```
 
 ### 2. 자동 빌드된 Codex 설치
