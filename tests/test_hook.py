@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from adaptive_model_router.catalog import CatalogResult, ModelInfo
+from adaptive_model_router.catalog import LEGACY_FAMILY, CatalogResult, ModelInfo
 from adaptive_model_router.config import load_config
 from adaptive_model_router.hook import evaluate_hook
 
@@ -17,7 +17,8 @@ class HookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             "os.environ", {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory}
         ), patch(
-            "adaptive_model_router.hook.load_codex_catalog", return_value=CatalogResult("AVAILABLE", (model,))
+            "adaptive_model_router.hook.resolve_active_catalogs",
+            return_value=(None, {LEGACY_FAMILY: CatalogResult("AVAILABLE", (model,))}),
         ):
             first = evaluate_hook(payload, load_config())
             second = evaluate_hook(payload, load_config())
@@ -31,7 +32,8 @@ class HookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             "os.environ", {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory}
         ), patch(
-            "adaptive_model_router.hook.load_codex_catalog", return_value=CatalogResult("AVAILABLE", (model,))
+            "adaptive_model_router.hook.resolve_active_catalogs",
+            return_value=(None, {LEGACY_FAMILY: CatalogResult("AVAILABLE", (model,))}),
         ):
             evaluate_hook({"session_id": "s", "model": "balanced", "prompt": secret_prompt}, load_config())
             contents = "".join(path.read_text(encoding="utf-8") for path in Path(directory).rglob("*.json"))

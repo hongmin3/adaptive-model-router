@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
-from .catalog import ModelInfo
+from .catalog import CatalogResult, ModelInfo
 
 
 @dataclass(frozen=True)
@@ -17,67 +18,202 @@ class Selection:
     note: str = ""
 
 
+@dataclass(frozen=True)
+class Counterpart:
+    """The equivalent model in another family of the same provider, shown for comparison."""
+
+    family: str
+    label: str
+    model: ModelInfo
+    reasoning: str
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class Recommendation:
+    family: str | None
+    label: str
+    selection: Selection
+    counterparts: tuple[Counterpart, ...] = ()
+
+
 def _hint_score(model: ModelInfo, hints: list[str]) -> int:
     description = model.description.casefold()
-    return sum(1 for hint in hints if hint.casefold() in description)
+    # The first hint names the profile's defining trait (fast, balanced,
+    # reliable, most capable).  Secondary hints add evidence without allowing
+    # broad words such as "everyday" or "complex" to collapse adjacent tiers.
+    if hints and hints[0].casefold() in description:
+        return 100
+    return sum(1 for hint in hints[1:] if hint.casefold() in description)
 
 
-def _rank_for_profile(models: list[ModelInfo], profile: str, config: dict[str, Any]) -> list[ModelInfo]:
+def _slug_role_score(model: ModelInfo, profile: str, config: dict[str, Any]) -> int:
+    patterns = config["model_selection"].get("slug_role_patterns", {}).get(profile, [])
+    return 100 if any(re.search(str(pattern), model.slug, re.I) for pattern in patterns) else 0
+
+
+def _is_eligible(model: ModelInfo, config: dict[str, Any]) -> bool:
+    excluded = config["model_selection"].get(
+        "exclude_description_terms", ["previous-generation", "deprecated"],
+    )
+    description = model.description.casefold()
+    return not any(str(term).casefold() in description for term in excluded)
+
+
+def _preferred_slugs(profile: str, family: dict[str, Any] | None) -> list[str]:
+    return [str(slug).casefold() for slug in (family or {}).get("profile_models", {}).get(profile, [])]
+
+
+def _rank_for_profile(
+    models: list[ModelInfo], profile: str, config: dict[str, Any], family: dict[str, Any] | None = None,
+) -> list[ModelInfo]:
     hints = config["model_selection"]["description_hints"].get(profile, [])
-    if profile == "MAX":
-        return sorted(models, key=lambda item: item.priority)
-    return sorted(models, key=lambda item: (-_hint_score(item, hints), item.priority))
+    ranked = sorted(
+        models,
+        key=lambda item: (-max(_hint_score(item, hints), _slug_role_score(item, profile, config)), item.priority),
+    )
+    preferred = _preferred_slugs(profile, family)
+    if not preferred:
+        return ranked
+    # A family may pin which model serves a profile when its descriptions carry no usable
+    # hint; sorted() is stable, so unpinned models keep the hint ordering behind the pinned.
+    return sorted(
+        ranked,
+        key=lambda item: preferred.index(item.slug.casefold())
+        if item.slug.casefold() in preferred
+        else len(preferred),
+    )
 
 
-def _fits_profile(model: ModelInfo, profile: str, config: dict[str, Any]) -> bool:
+def _fits_profile(
+    model: ModelInfo, profile: str, config: dict[str, Any], family: dict[str, Any] | None = None,
+) -> bool:
+    if model.slug.casefold() in _preferred_slugs(profile, family):
+        return True
     hints = config["model_selection"]["description_hints"].get(profile, [])
-    return _hint_score(model, hints) > 0
+    # Keeping the current model on a secondary word caused Sol to satisfy
+    # BALANCED via "everyday" and Astra to satisfy STRONG via "complex".
+    # Require the defining trait when deciding whether the current model is
+    # already the right tier.
+    return bool(hints) and str(hints[0]).casefold() in model.description.casefold()
 
 
-def _nearest_effort(requested: str, supported: tuple[str, ...], order: list[str]) -> str:
+def _nearest_effort(
+    requested: str, supported: tuple[str, ...], order: list[str], tie_break: str = "up",
+) -> str:
     if requested in supported:
         return requested
     requested_index = order.index(requested) if requested in order else order.index("medium")
     candidates = [value for value in supported if value in order]
     if not candidates:
         return requested
-    return min(candidates, key=lambda value: (abs(order.index(value) - requested_index), order.index(value) > requested_index))
+    # DeepSeek exposes no MEDIUM, so the common BALANCED recommendation always lands on a
+    # tie between LOW and HIGH. Rounding down would silently hand the everyday default the
+    # provider's reduced mode, so ties round up unless the config says otherwise.
+    prefer_lower = str(tie_break).casefold() == "down"
+    return min(
+        candidates,
+        key=lambda value: (
+            abs(order.index(value) - requested_index),
+            (order.index(value) > requested_index) if prefer_lower else (order.index(value) < requested_index),
+        ),
+    )
 
 
 def select_model(
     models: tuple[ModelInfo, ...], profile: str, reasoning: str, config: dict[str, Any],
     current_model: str | None = None, statuses: dict[str, dict[str, Any]] | None = None,
-    force_current: bool = False,
+    force_current: bool = False, family: dict[str, Any] | None = None,
 ) -> Selection:
     statuses = statuses or {}
     requested = reasoning.casefold()
-    available = [model for model in models if statuses.get(model.slug, {}).get("status", "AVAILABLE") == "AVAILABLE"]
+    eligible = [model for model in models if _is_eligible(model, config)]
+    available = [
+        model for model in eligible
+        if statuses.get(model.slug, {}).get("status", "AVAILABLE") == "AVAILABLE"
+    ]
     if not available:
         return Selection(None, requested, requested, "UNAVAILABLE", note="No available same-provider model found.")
 
     current = next((model for model in available if model.slug == current_model), None)
-    if current and (force_current or _fits_profile(current, profile, config)):
+    if current and (force_current or _fits_profile(current, profile, config, family)):
         chosen = current
     else:
-        preferred_rank = _rank_for_profile(list(models), profile, config)
+        preferred_rank = _rank_for_profile(eligible, profile, config, family)
         preferred = preferred_rank[0]
         if preferred in available:
             chosen = preferred
         else:
             chosen = None
             for fallback_profile in config["model_selection"].get("fallback_profiles", {}).get(profile, []):
-                candidates = [model for model in available if _fits_profile(model, fallback_profile, config)]
+                candidates = [model for model in available if _fits_profile(model, fallback_profile, config, family)]
                 if candidates:
-                    chosen = _rank_for_profile(candidates, fallback_profile, config)[0]
+                    chosen = _rank_for_profile(candidates, fallback_profile, config, family)[0]
                     break
-            chosen = chosen or _rank_for_profile(available, profile, config)[0]
+            chosen = chosen or _rank_for_profile(available, profile, config, family)[0]
 
-    adjusted = _nearest_effort(requested, chosen.efforts, config["reasoning_order"])
-    preferred = _rank_for_profile(list(models), profile, config)[0]
+    tie_break = config["model_selection"].get("reasoning_tie_break", "up")
+    adjusted = _nearest_effort(requested, chosen.efforts, config["reasoning_order"], tie_break)
+    preferred = _rank_for_profile(eligible, profile, config, family)[0]
     preferred_status = statuses.get(preferred.slug, {}).get("status", "AVAILABLE")
     fallback_from = preferred.slug if preferred.slug != chosen.slug and preferred_status != "AVAILABLE" else None
     state = statuses.get(fallback_from or chosen.slug, {})
     return Selection(
         chosen, adjusted, requested, "AVAILABLE", reset=state.get("reset"), fallback_from=fallback_from,
         note=(f"{requested.upper()} is unsupported; using {adjusted.upper()}." if adjusted != requested else ""),
+    )
+
+
+def select_counterparts(
+    catalogs: dict[str, CatalogResult], active_family: str | None, profile: str, reasoning: str,
+    config: dict[str, Any], provider: str = "codex", statuses: dict[str, dict[str, Any]] | None = None,
+) -> tuple[Counterpart, ...]:
+    """Pick the equivalent model in every other family of the same provider.
+
+    The counterpart is informational. The router never switches provider on its own, so this
+    answers "what would serve this task on the other side" rather than proposing a swap.
+    """
+    families = config.get("providers", {}).get(provider, {}).get("families", {})
+    counterparts: list[Counterpart] = []
+    for family, definition in families.items():
+        if family == active_family:
+            continue
+        catalog = catalogs.get(family)
+        if catalog is None or not catalog.models:
+            continue
+        selection = select_model(
+            catalog.models, profile, reasoning, config, statuses=statuses, family=definition,
+        )
+        if selection.model is None:
+            continue
+        counterparts.append(Counterpart(
+            family=family,
+            label=str(definition.get("label", family)),
+            model=selection.model,
+            reasoning=selection.reasoning,
+            note=selection.note,
+        ))
+    return tuple(counterparts)
+
+
+def recommend(
+    catalogs: dict[str, CatalogResult], active_family: str | None, profile: str, reasoning: str,
+    config: dict[str, Any], provider: str = "codex", current_model: str | None = None,
+    statuses: dict[str, dict[str, Any]] | None = None, force_current: bool = False,
+) -> Recommendation:
+    """Select inside the active family, then attach the equivalent model in each other family."""
+    families = config.get("providers", {}).get(provider, {}).get("families", {})
+    definition = families.get(active_family or "", {})
+    active_catalog = catalogs.get(active_family or "")
+    models = active_catalog.models if active_catalog else ()
+    selection = select_model(
+        models, profile, reasoning, config, current_model, statuses, force_current, definition,
+    )
+    return Recommendation(
+        family=active_family,
+        label=str(definition.get("label", active_family or "")),
+        selection=selection,
+        counterparts=select_counterparts(
+            catalogs, active_family, profile, reasoning, config, provider, statuses,
+        ),
     )

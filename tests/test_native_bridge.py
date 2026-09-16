@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from adaptive_model_router.catalog import CatalogResult, ModelInfo
+from adaptive_model_router.catalog import LEGACY_FAMILY, CatalogResult, ModelInfo
 from adaptive_model_router.config import load_config
 from adaptive_model_router.native_bridge import route_native
 
@@ -21,14 +21,19 @@ class NativeBridgeTests(unittest.TestCase):
                 ModelInfo("strong-model", "Strong Model", "reliable complex demanding", ("medium", "high"), 2),
             ),
         )
-        with patch("adaptive_model_router.native_bridge.load_codex_catalog", return_value=catalog):
+        with patch(
+            "adaptive_model_router.native_bridge.resolve_active_catalogs",
+            return_value=(None, {LEGACY_FAMILY: catalog}),
+        ):
             result = route_native(
-                {"prompt": "프로젝트 전체 구조를 분석하고 아키텍처를 개선해줘", "current_model": "fast-model"},
+                {"prompt": "원인 불명의 복잡한 버그를 분석하고 수정해줘", "current_model": "fast-model"},
                 load_config(),
             )
         self.assertTrue(result["enabled"])
         self.assertEqual(result["model"], "strong-model")
         self.assertEqual(result["reasoning"], "high")
+        self.assertIn("model_score", result)
+        self.assertIn("confidence_reason", result)
 
     def test_empty_prompt_is_disabled(self) -> None:
         self.assertEqual(route_native({"prompt": ""})["error"], "empty_prompt")

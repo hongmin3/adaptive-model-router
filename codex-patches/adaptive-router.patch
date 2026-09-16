@@ -4,16 +4,16 @@ Date: Mon, 14 Sep 2026 11:30:04 +0900
 Subject: [PATCH] feat(tui): confirm local adaptive model routing
 
 ---
- codex-rs/tui/src/chatwidget.rs                |  26 ++++
- codex-rs/tui/src/chatwidget/constructor.rs    |   2 +
- .../tui/src/chatwidget/input_submission.rs    | 140 ++++++++++++++++++
- 3 files changed, 168 insertions(+)
+ codex-rs/tui/src/chatwidget.rs                |  39 ++++++++++++++++++++
+ codex-rs/tui/src/chatwidget/constructor.rs    |   2 ++
+ .../tui/src/chatwidget/input_submission.rs    | 163 ++++++++++++++++++++
+ 3 files changed, 204 insertions(+)
 
 diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
 index 16d4a6e..dd663ef 100644
 --- a/codex-rs/tui/src/chatwidget.rs
 +++ b/codex-rs/tui/src/chatwidget.rs
-@@ -797,6 +797,32 @@ pub(crate) struct ChatWidget {
+@@ -797,6 +797,45 @@ pub(crate) struct ChatWidget {
      external_editor_state: ExternalEditorState,
      last_rendered_user_message_display: Option<UserMessageDisplay>,
      last_non_retry_error: Option<(String, String)>,
@@ -43,6 +43,19 @@ index 16d4a6e..dd663ef 100644
 +    score: Option<i32>,
 +    confidence: Option<f64>,
 +    reason: Option<String>,
++    #[serde(default)]
++    family_label: Option<String>,
++    /// Equivalent models in the provider's other families, shown for comparison only.
++    #[serde(default)]
++    alternatives: Vec<AdaptiveRouteAlternative>,
++}
++
++#[derive(Clone, serde::Deserialize)]
++struct AdaptiveRouteAlternative {
++    family_label: Option<String>,
++    model_display_name: Option<String>,
++    model: Option<String>,
++    reasoning: Option<String>,
  }
  
  #[cfg_attr(not(test), allow(dead_code))]
@@ -63,7 +76,7 @@ diff --git a/codex-rs/tui/src/chatwidget/input_submission.rs b/codex-rs/tui/src/
 index 6e408aa..8f1c29b 100644
 --- a/codex-rs/tui/src/chatwidget/input_submission.rs
 +++ b/codex-rs/tui/src/chatwidget/input_submission.rs
-@@ -113,6 +113,96 @@ impl ChatWidget {
+@@ -113,6 +113,119 @@ impl ChatWidget {
          history_record: UserMessageHistoryRecord,
          shell_escape_policy: ShellEscapePolicy,
      ) -> (bool, Option<AppCommand>) {
@@ -139,9 +152,32 @@ index 6e408aa..8f1c29b 100644
 +            let score = recommendation.score.unwrap_or_default();
 +            let confidence = recommendation.confidence.unwrap_or_default();
 +            let profile = recommendation.profile.as_deref().unwrap_or("BALANCED");
++            let family = recommendation
++                .family_label
++                .as_deref()
++                .map(|label| format!(" ({label})"))
++                .unwrap_or_default();
++            let alternatives = recommendation
++                .alternatives
++                .iter()
++                .map(|alternative| {
++                    let name = alternative
++                        .model_display_name
++                        .as_deref()
++                        .or(alternative.model.as_deref())
++                        .unwrap_or("UNKNOWN");
++                    let label = alternative.family_label.as_deref().unwrap_or("Alternative");
++                    let effort = alternative
++                        .reasoning
++                        .as_deref()
++                        .unwrap_or("unknown")
++                        .to_ascii_uppercase();
++                    format!("\nAlternative ({label}): {name} · {effort}")
++                })
++                .collect::<String>();
 +            self.add_info_message(
 +                format!(
-+                    "Adaptive Model Router\n\nRecommended: {display_name}\nReasoning: {}\nProfile: {profile}\nReason: {reason}\nScore: {score} · Confidence: {confidence:.2}\n\n추천 모델로 바꾸시겠습니까? [Y/n]",
++                    "Adaptive Model Router\n\nRecommended: {display_name}{family}\nReasoning: {}{alternatives}\nProfile: {profile}\nReason: {reason}\nScore: {score} · Confidence: {confidence:.2}\n\n추천 모델로 바꾸시겠습니까? [Y/n]\n(Y는 추천 모델에만 적용됩니다. 대안은 Provider 전환이 필요합니다.)",
 +                    reasoning.as_str().to_ascii_uppercase()
 +                ),
 +                /*hint*/ None,

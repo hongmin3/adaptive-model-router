@@ -6,16 +6,17 @@ import sys
 from pathlib import Path
 
 from .catalog import (
+    LEGACY_FAMILY,
     load_claude_catalog,
-    load_codex_catalog,
     load_current_claude_config,
     load_current_codex_config,
     load_status_overrides,
+    resolve_active_catalogs,
     resolve_command,
 )
 from .config import load_config
 from .scorer import ScoreResult, score_prompt
-from .selector import Selection, select_model
+from .selector import Recommendation, recommend
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,6 +34,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--codex-command", default="codex", help="Codex executable name or path")
     parser.add_argument("--claude-command", default="claude", help="Claude executable name or path")
+    parser.add_argument(
+        "--family",
+        help="Model family to route inside (e.g. openai, deepseek); detected from the current model by default",
+    )
     return parser
 
 
@@ -59,9 +64,10 @@ def _print_debug(result: ScoreResult) -> None:
 
 
 def _print_recommendation(
-    selection: Selection, result: ScoreResult, current_model: str | None, current_effort: str | None,
-    provider_label: str, reasoning_label: str,
+    recommendation: Recommendation, result: ScoreResult, current_model: str | None,
+    current_effort: str | None, provider_label: str, reasoning_label: str,
 ) -> None:
+    selection = recommendation.selection
     print(f"{provider_label}\n")
     print(f"{selection.status}\n")
     if current_model:
@@ -73,8 +79,12 @@ def _print_recommendation(
         print("AVAILABLE MODELS:\nUNKNOWN")
         return
     keep_current = selection.model.slug == current_model and selection.reasoning == (current_effort or "").casefold()
-    print(f"Recommended:\n{'KEEP CURRENT' if keep_current else selection.model.display_name}")
+    family_suffix = f" ({recommendation.label})" if recommendation.label else ""
+    print(f"Recommended:\n{'KEEP CURRENT' if keep_current else selection.model.display_name}{family_suffix}")
     print(f"\n{reasoning_label}:\n{selection.reasoning.upper()}")
+    for counterpart in recommendation.counterparts:
+        print(f"\nAlternative ({counterpart.label}):")
+        print(f"{counterpart.model.display_name} / {counterpart.reasoning.upper()}")
     print(f"\nReason:\n{result.reason}")
     if selection.note:
         print(f"\n{selection.note}")
@@ -90,23 +100,32 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     result = score_prompt(prompt, config)
     if args.provider == "codex":
-        catalog = load_codex_catalog(args.codex_command, refresh=args.refresh_catalog)
         current_model, current_effort = load_current_codex_config()
+        active_family, catalogs = resolve_active_catalogs(
+            config, current_model, args.provider, args.refresh_catalog, args.codex_command,
+        )
     else:
-        catalog = load_claude_catalog(args.claude_command, config, refresh=args.refresh_catalog)
         current_model, current_effort = load_current_claude_config()
+        active_family = None
+        catalogs = {
+            LEGACY_FAMILY: load_claude_catalog(args.claude_command, config, refresh=args.refresh_catalog)
+        }
+    if args.family and args.family in catalogs:
+        active_family = args.family
     provider_config = config["providers"][args.provider]
-    if catalog.status == "AUTH_REQUIRED":
+    active_catalog = catalogs.get(active_family or LEGACY_FAMILY)
+    if active_catalog is not None and active_catalog.status == "AUTH_REQUIRED":
         print(f"{provider_config['label']}\n\nAUTHENTICATION REQUIRED\n\n현재 로그인 상태를 확인할 수 없습니다.\n\n모델 추천 전에 인증이 필요합니다.")
         return 3
     statuses = load_status_overrides(args.status_file, args.provider)
-    selection = select_model(
-        catalog.models, result.profile, result.reasoning, config, current_model, statuses,
-        force_current=result.keep_current_model,
+    recommendation = recommend(
+        catalogs, active_family, result.profile, result.reasoning, config, args.provider,
+        current_model, statuses, force_current=result.keep_current_model,
     )
+    selection = recommendation.selection
 
     _print_recommendation(
-        selection, result, current_model, current_effort,
+        recommendation, result, current_model, current_effort,
         provider_config["label"], provider_config["reasoning_label"],
     )
     if args.debug:

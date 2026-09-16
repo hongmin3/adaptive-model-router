@@ -4,10 +4,10 @@ import json
 import sys
 from typing import Any
 
-from .catalog import load_codex_catalog
+from .catalog import resolve_active_catalogs
 from .config import load_config
 from .scorer import score_prompt
-from .selector import select_model
+from .selector import recommend
 
 
 def route_native(payload: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -22,22 +22,28 @@ def route_native(payload: dict[str, Any], config: dict[str, Any] | None = None) 
 
     router_config = config or load_config()
     result = score_prompt(prompt, router_config)
-    catalog = load_codex_catalog()
     current_model = str(payload.get("current_model", "")).strip() or None
-    selection = select_model(
-        catalog.models,
+    # The provider wrapper launches Codex with `--model deepseek-flash`, so the running slug
+    # is what says which family is actually serving this session.
+    active_family, catalogs = resolve_active_catalogs(router_config, current_model)
+    recommendation = recommend(
+        catalogs,
+        active_family,
         result.profile,
         result.reasoning,
         router_config,
         current_model=current_model,
         force_current=result.keep_current_model,
     )
+    selection = recommendation.selection
     if selection.model is None:
         return {
             "enabled": False,
             "error": "no_available_model",
             "score": result.score,
+            "model_score": result.model_score,
             "confidence": result.confidence,
+            "confidence_reason": result.confidence_reason,
         }
 
     return {
@@ -45,10 +51,24 @@ def route_native(payload: dict[str, Any], config: dict[str, Any] | None = None) 
         "model": selection.model.slug,
         "model_display_name": selection.model.display_name,
         "reasoning": selection.reasoning,
+        "family": recommendation.family,
+        "family_label": recommendation.label,
         "profile": result.profile,
         "score": result.score,
+        "model_score": result.model_score,
         "confidence": result.confidence,
-        "reason": result.reason,
+        "confidence_reason": result.confidence_reason,
+        "reason": f"{result.reason} ({result.confidence_reason})",
+        "alternatives": [
+            {
+                "family": counterpart.family,
+                "family_label": counterpart.label,
+                "model": counterpart.model.slug,
+                "model_display_name": counterpart.model.display_name,
+                "reasoning": counterpart.reasoning,
+            }
+            for counterpart in recommendation.counterparts
+        ],
     }
 
 

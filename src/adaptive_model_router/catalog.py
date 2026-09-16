@@ -166,3 +166,75 @@ def load_status_overrides(path: Path | None, provider: str = "codex") -> dict[st
         payload = json.load(handle)
     provider_payload = payload.get("providers", {}).get(provider, payload)
     return {str(key): value for key, value in provider_payload.get("models", {}).items()}
+
+
+def expand_path(value: str) -> Path:
+    return Path(value).expanduser()
+
+
+def family_definitions(config: dict[str, Any], provider: str = "codex") -> dict[str, dict[str, Any]]:
+    return config.get("providers", {}).get(provider, {}).get("families", {})
+
+
+def default_family(config: dict[str, Any], provider: str = "codex") -> str | None:
+    families = family_definitions(config, provider)
+    if not families:
+        return None
+    configured = config["providers"][provider].get("default_family")
+    return configured if configured in families else next(iter(families))
+
+
+def detect_family(slug: str | None, config: dict[str, Any], provider: str = "codex") -> str | None:
+    """Return the model family a slug belongs to, using the configured slug patterns.
+
+    The provider wrapper launches Codex with `--model deepseek-flash` instead of writing
+    a marker file, so the running model's slug is the only reliable in-session signal of
+    which family is actually serving the request.
+    """
+    if not slug:
+        return None
+    for family, definition in family_definitions(config, provider).items():
+        if any(re.search(pattern, slug, re.I) for pattern in definition.get("slug_patterns", [])):
+            return family
+    return None
+
+
+def load_family_catalog(
+    family: str, config: dict[str, Any], provider: str = "codex", refresh: bool = False,
+    command: str = "codex", cache_path: Path | None = None,
+) -> CatalogResult:
+    """Load one family's local model catalog; every family uses the Codex catalog schema."""
+    definition = family_definitions(config, provider).get(family)
+    if definition is None:
+        return CatalogResult("UNKNOWN", (), f"Unknown model family: {family}")
+    path = cache_path or expand_path(str(definition.get("catalog_path", "")))
+    allow_refresh = refresh and bool(definition.get("refresh_via_cli"))
+    return load_codex_catalog(command, refresh=allow_refresh, cache_path=path)
+
+
+def load_family_catalogs(
+    config: dict[str, Any], provider: str = "codex", refresh: bool = False, command: str = "codex",
+) -> dict[str, CatalogResult]:
+    return {
+        family: load_family_catalog(family, config, provider, refresh, command)
+        for family in family_definitions(config, provider)
+    }
+
+
+LEGACY_FAMILY = ""
+
+
+def resolve_active_catalogs(
+    config: dict[str, Any], current_model: str | None, provider: str = "codex",
+    refresh: bool = False, command: str = "codex",
+) -> tuple[str | None, dict[str, CatalogResult]]:
+    """Return the family serving this session and every family's catalog.
+
+    A config predating the family block still has to route, so the absence of families falls
+    back to the single legacy catalog under `LEGACY_FAMILY`, which yields no counterparts.
+    """
+    if not family_definitions(config, provider):
+        return None, {LEGACY_FAMILY: load_codex_catalog(command, refresh=refresh)}
+    catalogs = load_family_catalogs(config, provider, refresh, command)
+    active = detect_family(current_model, config, provider) or default_family(config, provider)
+    return active, catalogs

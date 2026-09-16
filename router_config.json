@@ -1,12 +1,13 @@
 {
-  "version": 1,
+  "version": 2,
   "defaults": {
     "score": 5,
+    "model_score": 2,
     "profile": "BALANCED",
     "reasoning": "MEDIUM",
-    "confidence_threshold": 0.75,
-    "uncertain_profile": "BALANCED",
-    "uncertain_reasoning": "MEDIUM"
+    "confidence_threshold": 0.50,
+    "uncertain_profile": "FAST",
+    "uncertain_reasoning": "LOW"
   },
   "thresholds": {
     "low_max": 4,
@@ -33,6 +34,8 @@
       "id": "narrow_simple_edit",
       "label": "narrow simple edit",
       "score": -4,
+      "model_score": -2,
+      "confidence_conflict": false,
       "all_of": [
         ["오타", "문구", "한 줄", "한줄", "파일명", "변수명", "번역", "markdown", "readme", "문자열 검색", "명령 실행"],
         ["수정", "변경", "추가", "정리", "바꿔", "번역", "검색", "실행"]
@@ -43,18 +46,21 @@
       "id": "normal_implementation",
       "label": "general implementation",
       "score": 1,
-      "any_of": ["기능 구현", "기능 추가", "python 자동화", "shell script", "shell 스크립트", "api 연동", "테스트 코드", "데이터 가공", "설정 변경"]
+      "model_score": 4,
+      "any_of": ["기능 구현", "기능을 구현", "기능 추가", "자동화 기능", "자동화 구현", "python 자동화", "shell script", "shell 스크립트", "api 연동", "테스트 코드", "데이터 가공", "설정 변경"]
     },
     {
       "id": "multiple_files",
       "label": "multiple files",
       "score": 2,
+      "model_score": 3,
       "any_of": ["여러 파일", "다중 파일", "복수 파일", "multiple files"]
     },
     {
       "id": "project_wide_analysis",
       "label": "project-wide analysis",
       "score": 3,
+      "model_score": 6,
       "all_of": [
         ["프로젝트 전체", "전체 프로젝트", "전체 코드베이스", "전체 구조", "모든 파일", "전수"],
         ["분석", "확인", "검토", "개선", "리팩터링", "refactor"]
@@ -64,6 +70,7 @@
       "id": "architecture_work",
       "label": "architecture or refactoring work",
       "score": 3,
+      "model_score": 6,
       "all_of": [
         ["architecture", "아키텍처", "구조", "refactoring", "리팩터링", "설계"],
         ["분석", "개선", "재설계", "검토", "리팩터링", "refactor", "문제점"]
@@ -74,18 +81,21 @@
       "id": "complex_debugging",
       "label": "complex debugging",
       "score": 4,
+      "model_score": 6,
       "any_of": ["근본 원인", "원인 불명", "복잡한 버그", "race condition", "concurrency", "synchronization", "교착", "deadlock", "성능 병목"]
     },
     {
       "id": "multi_module_dependency",
       "label": "multiple modules or dependency analysis",
       "score": 2,
+      "model_score": 4,
       "any_of": ["여러 모듈", "모듈 간", "의존성 분석", "dependency analysis", "side effect", "사이드 이펙트"]
     },
     {
       "id": "analysis_and_implementation",
       "label": "analysis and implementation",
       "score": 2,
+      "model_score": 3,
       "all_of": [
         ["분석", "원인", "검토", "확인"],
         ["수정", "구현", "개선", "적용", "리팩터링"]
@@ -95,17 +105,45 @@
       "id": "verification_required",
       "label": "testing or verification required",
       "score": 1,
+      "model_score": 1,
       "any_of": ["테스트", "검증", "빌드", "lint", "린트", "type check", "타입 검사"]
     },
     {
       "id": "high_impact_operation",
       "label": "high-impact operation",
       "score": 9,
+      "model_score": 10,
       "risk_floor": "HIGH",
       "any_of": ["db migration", "database migration", "스키마 마이그레이션", "production config", "운영 설정", "대량 삭제", "권한 변경", "인증 변경", "보안 코드", "security", "destructive"]
+    },
+    {
+      "id": "mechanical_wide_edit",
+      "label": "mechanical change across a broad scope",
+      "score": -4,
+      "model_score": 5,
+      "confidence_conflict": false,
+      "all_of": [
+        ["여러 파일", "다중 파일", "전체 코드베이스", "전수", "multiple files"],
+        ["이름 변경", "rename", "문자열 교체", "일괄 변경", "일괄 수정"]
+      ]
+    },
+    {
+      "id": "focused_hard_reasoning",
+      "label": "focused hard reasoning",
+      "score": 4,
+      "model_score": 4,
+      "any_of": ["알고리즘", "algorithm", "수학적 증명", "복잡도 분석", "complexity analysis"]
     }
   ],
   "model_selection": {
+    "reasoning_tie_break": "up",
+    "exclude_description_terms": ["previous-generation", "deprecated"],
+    "slug_role_patterns": {
+      "FAST": ["-luna(?:$|-)"],
+      "BALANCED": ["-terra(?:$|-)"],
+      "STRONG": ["-sol(?:$|-)"],
+      "MAX": ["-astra(?:$|-)"]
+    },
     "fallback_profiles": {
       "FAST": ["BALANCED", "STRONG", "MAX"],
       "BALANCED": ["STRONG", "FAST", "MAX"],
@@ -122,7 +160,28 @@
   "providers": {
     "codex": {
       "label": "Codex",
-      "reasoning_label": "Reasoning"
+      "reasoning_label": "Reasoning",
+      "default_family": "openai",
+      "families": {
+        "openai": {
+          "label": "GPT",
+          "catalog_path": "~/.codex/models_cache.json",
+          "slug_patterns": ["^gpt", "^o[1-9]", "^codex-"],
+          "refresh_via_cli": true,
+          "profile_models": {}
+        },
+        "deepseek": {
+          "label": "DeepSeek",
+          "catalog_path": "~/.codex/router/deepseek-models.json",
+          "slug_patterns": ["^deepseek"],
+          "profile_models": {
+            "FAST": ["deepseek-flash"],
+            "BALANCED": ["deepseek-flash"],
+            "STRONG": ["deepseek-v4-pro"],
+            "MAX": ["deepseek-v4-pro"]
+          }
+        }
+      }
     },
     "claude": {
       "label": "Claude Code",
@@ -136,6 +195,6 @@
   },
   "ai_fallback": {
     "enabled": false,
-    "policy": "Never call an LLM for routing. Low-confidence results use BALANCED/MEDIUM."
+    "policy": "Never call an LLM for routing. Low-confidence results use the cost-safe FAST/LOW fallback."
   }
 }

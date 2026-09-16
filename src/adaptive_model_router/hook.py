@@ -8,10 +8,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .catalog import load_codex_catalog
+from .catalog import resolve_active_catalogs
 from .config import load_config
 from .scorer import ScoreResult, score_prompt
-from .selector import Selection, select_model
+from .selector import Recommendation, Selection, recommend
 
 
 def _state_root() -> Path:
@@ -49,9 +49,12 @@ def _store_approval(path: Path, selection: Selection, result: ScoreResult) -> No
 
 
 def _recommendation_reason(
-    current_model: str | None, selection: Selection, result: ScoreResult, debug: bool,
+    current_model: str | None, recommendation: Recommendation, result: ScoreResult, debug: bool,
 ) -> str:
+    selection: Selection = recommendation.selection
     recommended = selection.model.display_name if selection.model else "KEEP CURRENT"
+    if recommendation.label:
+        recommended = f"{recommended} ({recommendation.label})"
     lines = [
         "Adaptive Model Router",
         "",
@@ -62,8 +65,12 @@ def _recommendation_reason(
         "",
         f"Recommended: {recommended}",
         f"Reasoning: {selection.reasoning.upper()}",
-        f"Reason: {result.reason}",
     ]
+    lines.extend(
+        f"Alternative ({counterpart.label}): {counterpart.model.display_name} / {counterpart.reasoning.upper()}"
+        for counterpart in recommendation.counterparts
+    )
+    lines.append(f"Reason: {result.reason}")
     if selection.note:
         lines.extend(("", selection.note))
     if debug:
@@ -95,20 +102,21 @@ def evaluate_hook(payload: dict[str, Any], config: dict[str, Any] | None = None)
         return {"continue": True}
 
     result = score_prompt(prompt, router_config)
-    catalog = load_codex_catalog()
-    selection = select_model(
-        catalog.models,
+    active_family, catalogs = resolve_active_catalogs(router_config, current_model)
+    recommendation = recommend(
+        catalogs,
+        active_family,
         result.profile,
         result.reasoning,
         router_config,
         current_model=current_model,
         force_current=result.keep_current_model,
     )
-    _store_approval(approval_path, selection, result)
+    _store_approval(approval_path, recommendation.selection, result)
     return {
         "decision": "block",
         "reason": _recommendation_reason(
-            current_model, selection, result, bool(hook_config.get("debug", False))
+            current_model, recommendation, result, bool(hook_config.get("debug", False))
         ),
     }
 
