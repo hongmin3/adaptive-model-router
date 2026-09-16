@@ -47,7 +47,7 @@
       "label": "general implementation",
       "score": 1,
       "model_score": 4,
-      "any_of": ["기능 구현", "기능을 구현", "기능 추가", "자동화 기능", "자동화 구현", "python 자동화", "shell script", "shell 스크립트", "api 연동", "테스트 코드", "데이터 가공", "설정 변경"]
+      "any_of": ["기능 구현", "기능을 구현", "기능 추가", "자동화 기능", "자동화 구현", "python 자동화", "shell script", "shell 스크립트", "api 연동", "endpoint를 구현", "endpoint 구현", "엔드포인트를 새로 만들어", "버그 수정", "오류 수정", "테스트 코드", "데이터 가공", "설정 변경"]
     },
     {
       "id": "multiple_files",
@@ -59,18 +59,18 @@
     {
       "id": "project_wide_analysis",
       "label": "project-wide analysis",
-      "score": 3,
-      "model_score": 6,
+      "score": 4,
+      "model_score": 7,
       "all_of": [
-        ["프로젝트 전체", "전체 프로젝트", "전체 코드베이스", "전체 구조", "모든 파일", "전수"],
-        ["분석", "확인", "검토", "개선", "리팩터링", "refactor"]
+        ["프로젝트 전체", "전체 프로젝트", "전체 코드베이스", "전체 구조", "전체 저장소", "모든 파일", "all files", "전수"],
+        ["분석", "확인", "검토", "리뷰", "review", "점검", "개선", "리팩터링", "refactor"]
       ]
     },
     {
       "id": "architecture_work",
       "label": "architecture or refactoring work",
-      "score": 3,
-      "model_score": 6,
+      "score": 4,
+      "model_score": 7,
       "all_of": [
         ["architecture", "아키텍처", "구조", "refactoring", "리팩터링", "설계"],
         ["분석", "개선", "재설계", "검토", "리팩터링", "refactor", "문제점"]
@@ -81,15 +81,15 @@
       "id": "complex_debugging",
       "label": "complex debugging",
       "score": 4,
-      "model_score": 6,
-      "any_of": ["근본 원인", "원인 불명", "복잡한 버그", "race condition", "concurrency", "synchronization", "교착", "deadlock", "성능 병목"]
+      "model_score": 7,
+      "any_of": ["근본 원인", "원인 불명", "복잡한 버그", "race condition", "concurrency", "synchronization", "동시성 경합", "교착", "deadlock", "성능 병목"]
     },
     {
       "id": "multi_module_dependency",
       "label": "multiple modules or dependency analysis",
       "score": 2,
       "model_score": 4,
-      "any_of": ["여러 모듈", "모듈 간", "의존성 분석", "dependency analysis", "side effect", "사이드 이펙트"]
+      "any_of": ["여러 모듈", "모듈 간", "의존성 분석", "의존 관계", "dependency analysis", "side effect", "사이드 이펙트"]
     },
     {
       "id": "analysis_and_implementation",
@@ -98,7 +98,7 @@
       "model_score": 3,
       "all_of": [
         ["분석", "원인", "검토", "확인"],
-        ["수정", "구현", "개선", "적용", "리팩터링"]
+        ["수정", "구현", "개선해줘", "개선하고", "개선한 뒤", "적용", "리팩터링"]
       ]
     },
     {
@@ -114,17 +114,18 @@
       "score": 9,
       "model_score": 10,
       "risk_floor": "HIGH",
-      "any_of": ["db migration", "database migration", "스키마 마이그레이션", "production config", "운영 설정", "대량 삭제", "권한 변경", "인증 변경", "보안 코드", "security", "destructive"]
+      "literal_mentions": ["security라는 단어", "security 단어", "security 문자열", "보안이라는 단어", "보안 단어", "production이라는 문자열"],
+      "any_of": ["db migration", "database migration", "스키마 마이그레이션", "production config", "운영 설정", "운영 서버", "운영 db", "production deploy", "production", "프로덕션", "prod deploy", "백업을 삭제", "백업 삭제", "대량 삭제", "권한 변경", "인증 변경", "보안 코드", "보안 취약점", "security", "destructive"]
     },
     {
       "id": "mechanical_wide_edit",
       "label": "mechanical change across a broad scope",
       "score": -4,
-      "model_score": 5,
+      "model_score": 7,
       "confidence_conflict": false,
       "all_of": [
-        ["여러 파일", "다중 파일", "전체 코드베이스", "전수", "multiple files"],
-        ["이름 변경", "rename", "문자열 교체", "일괄 변경", "일괄 수정"]
+        ["여러 파일", "다중 파일", "전체 코드베이스", "프로젝트 전체", "모든 파일", "전수", "multiple files", "across files"],
+        ["이름 변경", "rename", "리네임", "문자열 교체", "일괄 교체", "일괄 변경", "일괄 수정", "replace all occurrences"]
       ]
     },
     {
@@ -132,7 +133,31 @@
       "label": "focused hard reasoning",
       "score": 4,
       "model_score": 4,
-      "any_of": ["알고리즘", "algorithm", "수학적 증명", "복잡도 분석", "complexity analysis"]
+      "any_of": ["알고리즘", "algorithm", "수학적 증명", "복잡도 분석", "complexity analysis", "sql 쿼리 최적화"],
+      "none_of": ["explain this algorithm", "알고리즘을 간단히 설명", "알고리즘 설명만"]
+    },
+    {
+      "id": "code_review",
+      "label": "code review",
+      "score": 1,
+      "model_score": 4,
+      "any_of": ["코드 리뷰", "코드를 검토", "code review", "review this code"]
+    },
+    {
+      "id": "bug_discovery",
+      "label": "bug discovery",
+      "score": 1,
+      "model_score": 4,
+      "all_of": [["버그", "bug"], ["찾아", "찾기", "find", "뭐야"]],
+      "none_of": ["복잡한 버그", "원인 불명", "근본 원인"]
+    },
+    {
+      "id": "bug_diagnosis",
+      "label": "bug diagnosis",
+      "score": 1,
+      "model_score": 4,
+      "all_of": [["오류", "에러", "error", "버그", "bug", "실패"], ["원인", "분석", "진단", "조사", "찾아", "확인", "investigate", "diagnose"]],
+      "none_of": ["수정", "고쳐", "fix", "구현", "버그를 찾아", "버그가 뭐", "복잡한 버그", "원인 불명", "근본 원인"]
     }
   ],
   "model_selection": {

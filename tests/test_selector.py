@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from adaptive_model_router.catalog import ModelInfo
-from adaptive_model_router.config import load_config
+from adaptive_model_router.config import PACKAGED_CONFIG, load_config
 from adaptive_model_router.selector import select_model
 
 
@@ -41,7 +41,7 @@ CACHE_DESCRIPTION_MODELS = (
 class ModelSelectionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.config = load_config()
+        cls.config = load_config(PACKAGED_CONFIG)
 
     def test_limit_uses_same_provider_fallback(self) -> None:
         result = select_model(

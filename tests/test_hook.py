@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from adaptive_model_router.catalog import LEGACY_FAMILY, CatalogResult, ModelInfo
-from adaptive_model_router.config import load_config
+from adaptive_model_router.config import PACKAGED_CONFIG, load_config
 from adaptive_model_router.hook import evaluate_hook
 
 
@@ -20,8 +20,8 @@ class HookTests(unittest.TestCase):
             "adaptive_model_router.hook.resolve_active_catalogs",
             return_value=(None, {LEGACY_FAMILY: CatalogResult("AVAILABLE", (model,))}),
         ):
-            first = evaluate_hook(payload, load_config())
-            second = evaluate_hook(payload, load_config())
+            first = evaluate_hook(payload, load_config(PACKAGED_CONFIG))
+            second = evaluate_hook(payload, load_config(PACKAGED_CONFIG))
         self.assertEqual("block", first["decision"])
         self.assertIn("Fast Model", first["reason"])
         self.assertEqual({"continue": True}, second)
@@ -35,7 +35,7 @@ class HookTests(unittest.TestCase):
             "adaptive_model_router.hook.resolve_active_catalogs",
             return_value=(None, {LEGACY_FAMILY: CatalogResult("AVAILABLE", (model,))}),
         ):
-            evaluate_hook({"session_id": "s", "model": "balanced", "prompt": secret_prompt}, load_config())
+            evaluate_hook({"session_id": "s", "model": "balanced", "prompt": secret_prompt}, load_config(PACKAGED_CONFIG))
             contents = "".join(path.read_text(encoding="utf-8") for path in Path(directory).rglob("*.json"))
         self.assertNotIn(secret_prompt, contents)
 

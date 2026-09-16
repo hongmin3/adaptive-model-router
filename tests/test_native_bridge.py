@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from adaptive_model_router.catalog import LEGACY_FAMILY, CatalogResult, ModelInfo
-from adaptive_model_router.config import load_config
+from adaptive_model_router.config import PACKAGED_CONFIG, load_config
 from adaptive_model_router.native_bridge import route_native
 
 
@@ -27,7 +27,7 @@ class NativeBridgeTests(unittest.TestCase):
         ):
             result = route_native(
                 {"prompt": "원인 불명의 복잡한 버그를 분석하고 수정해줘", "current_model": "fast-model"},
-                load_config(),
+                load_config(PACKAGED_CONFIG),
             )
         self.assertTrue(result["enabled"])
         self.assertEqual(result["model"], "strong-model")

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from adaptive_model_router.catalog import load_claude_catalog, load_codex_catalog
-from adaptive_model_router.config import load_config
+from adaptive_model_router.config import PACKAGED_CONFIG, load_config
 
 
 class LocalCatalogTests(unittest.TestCase):
@@ -33,7 +33,7 @@ class LocalCatalogTests(unittest.TestCase):
 
     def test_claude_default_uses_registry_without_subprocess(self) -> None:
         with patch("adaptive_model_router.catalog.subprocess.run") as run:
-            result = load_claude_catalog(config=load_config())
+            result = load_claude_catalog(config=load_config(PACKAGED_CONFIG))
         run.assert_not_called()
         self.assertEqual("AVAILABLE", result.status)
         self.assertIn("sonnet", {model.slug for model in result.models})

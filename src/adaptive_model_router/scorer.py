@@ -36,6 +36,8 @@ def _contains(text: str, terms: list[str]) -> bool:
 
 
 def _matches_rule(text: str, rule: dict[str, Any]) -> bool:
+    for phrase in rule.get("literal_mentions", []):
+        text = text.replace(phrase.casefold(), " ")
     if rule.get("none_of") and _contains(text, rule["none_of"]):
         return False
     if rule.get("any_of") and not _contains(text, rule["any_of"]):
@@ -87,9 +89,16 @@ def score_prompt(prompt: str, config: dict[str, Any]) -> ScoreResult:
     matches: list[Match] = []
     risk_floor: str | None = None
 
-    for rule in config["rules"]:
-        if not _matches_rule(text, rule):
-            continue
+    matched_rules = [rule for rule in config["rules"] if _matches_rule(text, rule)]
+    # A tiny edit mentioned alongside substantive implementation is not a
+    # reason to classify the whole request as a tiny edit.
+    if any(
+        rule["id"] != "narrow_simple_edit" and int(rule.get("model_score", rule["score"])) >= 3
+        for rule in matched_rules
+    ):
+        matched_rules = [rule for rule in matched_rules if rule["id"] != "narrow_simple_edit"]
+
+    for rule in matched_rules:
         delta = int(rule["score"])
         score += delta
         model_score += int(rule.get("model_score", delta))
@@ -125,7 +134,7 @@ def score_prompt(prompt: str, config: dict[str, Any]) -> ScoreResult:
     reasoning = level
     keep_current = _contains(text, config.get("directives", {}).get("keep_current_model", []))
     reason = "explicit user setting" if explicit_reasoning or keep_current else (
-        ", ".join(match.label for match in matches[:3]) or "ambiguous request; balanced default"
+        ", ".join(match.label for match in matches[:3]) or "no matching routing evidence"
     )
     return ScoreResult(
         score, model_score, level, profile, reasoning, confidence, confidence_reason, tuple(matches), reason, uncertain,

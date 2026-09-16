@@ -50,6 +50,7 @@ def _read_prompt(parts: list[str]) -> str:
 def _print_debug(result: ScoreResult) -> None:
     print("\nRouter Debug\n")
     print(f"Score: {result.score}\n")
+    print(f"Model Score: {result.model_score}\n")
     print("Matched:")
     if result.matches:
         for match in result.matches:
@@ -58,9 +59,10 @@ def _print_debug(result: ScoreResult) -> None:
         print("(none)")
     print(f"\nResult:\n{result.level}")
     print(f"\nConfidence:\n{result.confidence:.2f}")
+    print(f"\nConfidence Basis:\n{result.confidence_reason}")
     print(f"\nModel:\n{result.profile}")
     if result.uncertain_default_used:
-        print("\nFallback:\nBALANCED / MEDIUM (low confidence)")
+        print(f"\nFallback:\n{result.profile} / {result.reasoning} (low confidence)")
 
 
 def _print_recommendation(
