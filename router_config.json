@@ -17,9 +17,16 @@
   "reasoning_order": ["low", "medium", "high", "xhigh", "max", "ultra"],
   "hook": {
     "approval_ttl_seconds": 600,
-    "always_confirm": true,
     "debug": false,
-    "claude_entrypoints": ["cli", "ssh-remote", "claude-coworker-terminal"]
+    "claude_modes": {
+      "cli": "block",
+      "ssh-remote": "block",
+      "claude-coworker-terminal": "block",
+      "claude-desktop": "advise",
+      "claude-desktop-3p": "advise",
+      "claude-vscode": "advise",
+      "*": "off"
+    }
   },
   "directives": {
     "keep_current_model": ["이 모델 그대로", "현재 모델 유지", "모델 바꾸지 마", "keep current model"],

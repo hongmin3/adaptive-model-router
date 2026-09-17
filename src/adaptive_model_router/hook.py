@@ -42,9 +42,47 @@ from .selector import Recommendation, Selection, recommend
 # after it was written, and the whole point is not to interrupt those.
 TERMINAL_ENTRYPOINTS = ("cli", "ssh-remote", "claude-coworker-terminal")
 
+# What the router does on a given surface.  BLOCK holds the prompt for confirmation, which
+# only works where someone can resubmit; ADVISE shows the same recommendation as a system
+# message and lets the prompt through, which is what a GUI wants; OFF says nothing.
+BLOCK = "block"
+ADVISE = "advise"
+OFF = "off"
+DEFAULT_SURFACE_MODE = "*"
+
 
 def _entrypoint() -> str:
     return (os.environ.get("CLAUDE_CODE_ENTRYPOINT") or "cli").strip()
+
+
+def _surface_mode(hook_config: dict[str, Any]) -> str:
+    """How loudly to speak on the surface this hook is running on.
+
+    Keyed by entrypoint with a `*` fallback so an unknown surface has a stated answer
+    rather than inheriting whichever branch happened to be written last; the shipped
+    fallback is OFF, which keeps a surface Anthropic adds later quiet until it is named.
+    """
+    modes = hook_config.get("claude_modes")
+    if not isinstance(modes, dict) or not modes:
+        return BLOCK if _entrypoint() in TERMINAL_ENTRYPOINTS else OFF
+    mode = modes.get(_entrypoint(), modes.get(DEFAULT_SURFACE_MODE, OFF))
+    return mode if mode in (BLOCK, ADVISE, OFF) else OFF
+
+
+def _already_recommended(
+    current_model: str | None, current_effort: str | None, selection: Selection,
+) -> bool:
+    """True when the session is already on exactly what would be recommended.
+
+    Both halves must be known: an unknown model or effort is not a match, it is an absence,
+    and treating it as one would silence the router on every session's first prompt.
+    """
+    if not current_model or not current_effort or selection.model is None:
+        return False
+    return (
+        current_model.casefold() == selection.model.slug.casefold()
+        and current_effort.casefold() == selection.reasoning.casefold()
+    )
 
 
 def _resolve_claude_model(
@@ -104,8 +142,32 @@ def _consume_approval(path: Path, ttl_seconds: int) -> bool:
         return False
 
 
-def _store_approval(path: Path, selection: Selection, result: ScoreResult) -> None:
+def _prune_approvals(directory: Path, ttl_seconds: int) -> None:
+    """Drop approvals that can no longer be consumed.
+
+    `_consume_approval` deletes only what it reads, so every recommendation the user walked
+    away from - a different prompt, a closed session - stays on disk for good.  The sweep
+    rides inside the write that creates the next one rather than sitting beside it as a
+    separate duty, so it cannot be skipped while approvals are still being written.
+    """
+    cutoff = time.time() - max(ttl_seconds, 0)
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_file() and entry.stat().st_mtime < cutoff:
+                entry.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def _store_approval(
+    path: Path, selection: Selection, result: ScoreResult, ttl_seconds: int = 600,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    _prune_approvals(path.parent, ttl_seconds)
     payload = {
         "created_at": time.time(),
         "recommended_model": selection.model.slug if selection.model else None,
@@ -120,7 +182,7 @@ def _store_approval(path: Path, selection: Selection, result: ScoreResult) -> No
 def _recommendation_reason(
     current_model: str | None, recommendation: Recommendation, result: ScoreResult, debug: bool,
     provider: str = "codex", provider_label: str = "Codex", reasoning_label: str = "Reasoning",
-    current_effort: str | None = None, current_source: str = "",
+    current_effort: str | None = None, current_source: str = "", advisory: bool = False,
 ) -> str:
     selection: Selection = recommendation.selection
     recommended = selection.model.display_name if selection.model else "KEEP CURRENT"
@@ -137,7 +199,7 @@ def _recommendation_reason(
     lines = [
         "Adaptive Model Router",
         "",
-        "MODEL CALL BLOCKED BEFORE EXECUTION",
+        "RECOMMENDATION (not applied)" if advisory else "MODEL CALL BLOCKED BEFORE EXECUTION",
         "",
         f"Current Model: {model_line}",
         f"Current {reasoning_label}: {effort_line}",
@@ -155,15 +217,20 @@ def _recommendation_reason(
     if debug:
         lines.extend(("", "Router Debug", f"Score: {result.score}", f"Confidence: {result.confidence:.2f}"))
         lines.extend(f"{match.score:+d} {match.label}" for match in result.matches)
-    lines.extend((
-        "",
-        "승인 방법:",
-        f"1. 추천 설정을 쓰려면 /model에서 위 모델과 {reasoning_label} 값을 선택하세요.",
-        "2. 현재 설정을 유지하려면 변경하지 않아도 됩니다.",
-        "3. 같은 Prompt를 다시 제출하면 승인으로 간주되어 실제 작업이 시작됩니다.",
-        "",
-        "Router 판단에는 LLM/API 호출과 모델 토큰이 사용되지 않았습니다.",
-    ))
+    if advisory:
+        lines.extend((
+            "",
+            f"이 Prompt는 그대로 실행됩니다. 추천을 쓰려면 /model에서 위 모델과 {reasoning_label} 값을 바꾸세요.",
+        ))
+    else:
+        lines.extend((
+            "",
+            "승인 방법:",
+            f"1. 추천 설정을 쓰려면 /model에서 위 모델과 {reasoning_label} 값을 선택하세요.",
+            "2. 현재 설정을 유지하려면 변경하지 않아도 됩니다.",
+            "3. 같은 Prompt를 다시 제출하면 승인으로 간주되어 실제 작업이 시작됩니다.",
+        ))
+    lines.extend(("", "Router 판단에는 LLM/API 호출과 모델 토큰이 사용되지 않았습니다."))
     return "\n".join(lines)
 
 
@@ -177,9 +244,10 @@ def evaluate_hook(
 
     router_config = config or load_config()
     hook_config = router_config.get("hook", {})
+    mode = BLOCK
     if provider == "claude":
-        allowed = hook_config.get("claude_entrypoints", list(TERMINAL_ENTRYPOINTS))
-        if allowed and _entrypoint() not in allowed:
+        mode = _surface_mode(hook_config)
+        if mode == OFF:
             return {"continue": True}
         # Real Claude Code fires UserPromptSubmit for prompts the user never typed
         # (scheduled wakeups, SDK/subagent calls); only a "user" prompt has someone
@@ -215,18 +283,28 @@ def evaluate_hook(
         current_model=current_model,
         force_current=result.keep_current_model,
     )
-    _store_approval(approval_path, recommendation.selection, result)
+    current_effort = _current_effort() if provider == "claude" else None
+    # Nothing to confirm when the session is already on the recommendation: blocking here
+    # costs a round trip and teaches the user that the screen carries no information.
+    if _already_recommended(current_model, current_effort, recommendation.selection):
+        return {"continue": True}
+
     provider_config = router_config.get("providers", {}).get(provider, {})
-    return {
-        "decision": "block",
-        "reason": _recommendation_reason(
-            current_model, recommendation, result, bool(hook_config.get("debug", False)),
-            provider, str(provider_config.get("label", provider.title())),
-            str(provider_config.get("reasoning_label", "Reasoning")),
-            _current_effort() if provider == "claude" else None,
-            current_source,
-        ),
-    }
+    reason = _recommendation_reason(
+        current_model, recommendation, result, bool(hook_config.get("debug", False)),
+        provider, str(provider_config.get("label", provider.title())),
+        str(provider_config.get("reasoning_label", "Reasoning")),
+        current_effort, current_source, advisory=mode == ADVISE,
+    )
+    if mode == ADVISE:
+        # A surface with no approval step still benefits from the recommendation; it just
+        # must not be interrupted for it.  No approval is stored: nothing was withheld.
+        return {"continue": True, "systemMessage": reason}
+    _store_approval(
+        approval_path, recommendation.selection, result,
+        int(hook_config.get("approval_ttl_seconds", 600)),
+    )
+    return {"decision": "block", "reason": reason}
 
 
 def main() -> int:

@@ -831,8 +831,11 @@ class ClaudeHookMatrixTests(unittest.TestCase):
                 )
         self.assertEqual("block", response["decision"])
 
-    def test_the_allowed_surfaces_are_configurable(self) -> None:
-        config = dict(self.config, hook=dict(self.config["hook"], claude_entrypoints=["claude-desktop"]))
+    def _with_modes(self, **modes: str) -> dict:
+        return dict(self.config, hook=dict(self.config["hook"], claude_modes=modes))
+
+    def test_the_mode_of_each_surface_is_configurable(self) -> None:
+        config = self._with_modes(**{"claude-desktop": "block"})
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             "os.environ",
             {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory, "CLAUDE_CODE_ENTRYPOINT": "claude-desktop"},
@@ -841,6 +844,99 @@ class ClaudeHookMatrixTests(unittest.TestCase):
                 {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
                 config, provider="claude",
             )
+        self.assertEqual("block", response["decision"])
+
+    def test_a_gui_surface_is_advised_without_being_interrupted(self) -> None:
+        """A desktop session has no way to approve by resubmitting, but can still be told."""
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            "os.environ",
+            {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory, "CLAUDE_CODE_ENTRYPOINT": "claude-desktop"},
+        ), patch("adaptive_model_router.hook.load_current_claude_config", return_value=(None, None)):
+            response = evaluate_hook(
+                {"session_id": "s", "prompt": "전체 프로젝트 보안 취약점을 점검하고 수정해줘", "source": "user"},
+                self.config, provider="claude",
+            )
+        self.assertTrue(response["continue"])
+        self.assertNotIn("decision", response)
+        self.assertIn("Recommended: fable", response["systemMessage"])
+        self.assertIn("RECOMMENDATION (not applied)", response["systemMessage"])
+        self.assertNotIn("승인 방법", response["systemMessage"])
+
+    def test_advising_stores_no_approval_because_nothing_was_withheld(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            "os.environ",
+            {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory, "CLAUDE_CODE_ENTRYPOINT": "claude-desktop"},
+        ), patch("adaptive_model_router.hook.load_current_claude_config", return_value=(None, None)):
+            evaluate_hook(
+                {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
+                self.config, provider="claude",
+            )
+            self.assertEqual([], list(Path(directory).rglob("*.json")))
+
+    def test_an_unnamed_surface_falls_back_to_the_configured_default(self) -> None:
+        for fallback, expected in (("off", "continue"), ("advise", "continue"), ("block", "block")):
+            with self.subTest(fallback=fallback), tempfile.TemporaryDirectory() as directory:
+                config = self._with_modes(**{"*": fallback})
+                with patch.dict(
+                    "os.environ",
+                    {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory,
+                     "CLAUDE_CODE_ENTRYPOINT": "surface-invented-tomorrow"},
+                ), patch(
+                    "adaptive_model_router.hook.load_current_claude_config", return_value=(None, None),
+                ):
+                    response = evaluate_hook(
+                        {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
+                        config, provider="claude",
+                    )
+                self.assertEqual(expected, response.get("decision", "continue"))
+
+    def test_an_unrecognised_mode_value_is_treated_as_off(self) -> None:
+        """A typo must not silently mean "block" on a surface that cannot approve."""
+        config = self._with_modes(**{"cli": "blcok"})
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            "os.environ", {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory},
+        ), patch("adaptive_model_router.hook.load_current_claude_config", return_value=(None, None)):
+            response = evaluate_hook(
+                {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘"}, config, provider="claude",
+            )
+        self.assertEqual({"continue": True}, response)
+
+    def test_a_session_already_on_the_recommendation_is_not_interrupted(self) -> None:
+        """Blocking to confirm what is already set teaches the user the screen is noise."""
+        with tempfile.TemporaryDirectory() as directory, _patch_discovery(), patch.dict(
+            "os.environ", {"CLAUDE_EFFORT": "MEDIUM"},
+        ):
+            transcript = self._transcript(directory, "claude-sonnet-5")
+            response = self._evaluate(
+                {"session_id": "s", "prompt": "API 연동 기능 구현해줘", "transcript_path": transcript},
+                directory, current_model=None,
+            )
+        self.assertEqual({"continue": True}, response)
+
+    def test_a_mismatch_in_either_half_still_interrupts(self) -> None:
+        cases = {"LOW": "effort differs", "MEDIUM": "both match"}
+        for effort, _label in cases.items():
+            with self.subTest(effort=effort), tempfile.TemporaryDirectory() as directory, \
+                    _patch_discovery(), patch.dict("os.environ", {"CLAUDE_EFFORT": effort}):
+                transcript = self._transcript(directory, "claude-sonnet-5")
+                response = self._evaluate(
+                    {"session_id": "s", "prompt": "API 연동 기능 구현해줘", "transcript_path": transcript},
+                    directory, current_model=None,
+                )
+                expected = "continue" if effort == "MEDIUM" else "block"
+                self.assertEqual(expected, response.get("decision", "continue"))
+
+    def test_an_unknown_current_setting_is_not_treated_as_a_match(self) -> None:
+        """Absence is not agreement: the first prompt of a session must still be routed."""
+        with tempfile.TemporaryDirectory() as directory, _patch_discovery():
+            environment = {k: v for k, v in os.environ.items() if k != "CLAUDE_EFFORT"}
+            environment["ADAPTIVE_MODEL_ROUTER_STATE_DIR"] = directory
+            with patch.dict("os.environ", environment, clear=True), patch(
+                "adaptive_model_router.hook.load_current_claude_config", return_value=("sonnet", None),
+            ):
+                response = evaluate_hook(
+                    {"session_id": "s", "prompt": "API 연동 기능 구현해줘"}, self.config, provider="claude",
+                )
         self.assertEqual("block", response["decision"])
 
     def test_the_codex_provider_is_not_gated_on_the_claude_entrypoint(self) -> None:
@@ -922,6 +1018,29 @@ class ClaudeHookMatrixTests(unittest.TestCase):
                 {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"}, directory,
             )
         self.assertNotIn("Alternative", response["reason"])
+
+    def test_abandoned_approvals_are_swept_when_the_next_one_is_written(self) -> None:
+        """Only a consumed approval deletes itself, so the rest would accumulate forever."""
+        with tempfile.TemporaryDirectory() as directory:
+            self._evaluate({"session_id": "s", "prompt": "프로젝트 전체를 분석해줘"}, directory)
+            stale = list(Path(directory).rglob("*.json"))
+            self.assertEqual(1, len(stale))
+            # Age the abandoned approval past the TTL, then write a different one.
+            old = time.time() - 10_000
+            os.utime(stale[0], (old, old))
+            self._evaluate({"session_id": "s", "prompt": "API 연동 기능 구현해줘"}, directory)
+            remaining = list(Path(directory).rglob("*.json"))
+        self.assertEqual(1, len(remaining))
+        self.assertNotIn(stale[0].name, [path.name for path in remaining])
+
+    def test_a_fresh_approval_is_not_swept_by_a_later_prompt(self) -> None:
+        """The sweep must not eat the approval the user is about to resubmit."""
+        with tempfile.TemporaryDirectory() as directory:
+            first = {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘"}
+            self._evaluate(first, directory)
+            self._evaluate({"session_id": "s", "prompt": "API 연동 기능 구현해줘"}, directory)
+            self.assertEqual(2, len(list(Path(directory).rglob("*.json"))))
+            self.assertEqual({"continue": True}, self._evaluate(first, directory))
 
     def test_the_stored_approval_never_holds_the_prompt(self) -> None:
         secret = "이 문장은 저장되면 안 되는 내용입니다"

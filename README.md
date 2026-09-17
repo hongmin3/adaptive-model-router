@@ -215,32 +215,60 @@ $env:ADAPTIVE_MODEL_ROUTER_ENABLED = "0"
 
 ## 사용 방법
 
-### 어느 화면에서 동작하는가 — 터미널에서만
+### 화면별 동작 모드 — 터미널은 차단, 데스크톱은 안내
 
-`~/.claude/settings.json`은 **사용자 단위**라 Hook을 한 번 등록하면 Claude Code의 모든 화면(터미널, 데스크톱 앱, VS Code 확장, SDK)에서 발동합니다. 하지만 "같은 Prompt를 다시 제출해 승인"할 사람이 있는 건 터미널 세션뿐이고, GUI에서 매번 차단 화면이 뜨면 방해만 됩니다.
+`~/.claude/settings.json`은 **사용자 단위**라 Hook을 한 번 등록하면 Claude Code의 모든 화면(터미널, 데스크톱 앱, VS Code 확장, SDK)에서 발동합니다. 하지만 "같은 Prompt를 다시 제출해 승인"이 자연스러운 건 터미널뿐입니다. 그래서 화면마다 **말하는 크기**를 다르게 합니다.
 
-그래서 Router는 실행 화면을 보고 터미널일 때만 개입합니다. 판정에 쓰는 것은 Claude Code가 하위 프로세스에 내려주는 `CLAUDE_CODE_ENTRYPOINT` 환경변수입니다.
+| 모드 | 동작 | 적합한 화면 |
+|---|---|---|
+| `block` | Prompt를 한 번 막고 승인을 받음 | 터미널 |
+| `advise` | **막지 않고** 추천만 알림으로 보여줌 | 데스크톱 앱, VS Code |
+| `off` | 아무 말도 안 함 | SDK, 자동화, 모르는 화면 |
 
-| 값 | Router |
-|---|---|
-| 미설정 (터미널 `claude` 세션), `cli`, `ssh-remote`, `claude-coworker-terminal` | **동작** |
-| `claude-desktop`, `claude-desktop-3p`, `remote_desktop`, `remote_mobile` | 통과 |
-| `claude-vscode`, `sdk-cli`, `sdk-ts`, `sdk-py`, `local-agent`, `mcp` | 통과 |
-| `claude_in_slack`, `claude-in-teams`, 그 밖의 새로 생기는 값 | 통과 |
-
-**deny-list가 아니라 allow-list입니다.** 앞으로 Anthropic이 새 화면을 추가해도 목록에 없으면 그냥 통과하므로, 모르는 GUI에서 갑자기 차단 화면이 뜨는 일은 없습니다. 반대 방향(새 터미널 화면이 생겼는데 조용히 동작 안 함)은 설정 한 줄로 해결합니다.
+기본값:
 
 ```json
-"hook": { "claude_entrypoints": ["cli", "ssh-remote", "claude-coworker-terminal"] }
+"hook": {
+  "claude_modes": {
+    "cli": "block", "ssh-remote": "block", "claude-coworker-terminal": "block",
+    "claude-desktop": "advise", "claude-desktop-3p": "advise", "claude-vscode": "advise",
+    "*": "off"
+  }
+}
 ```
 
-데스크톱 앱에서도 쓰고 싶으면 `"claude-desktop"`을 추가하고, 반대로 완전히 끄려면 `[]`가 아니라 존재하지 않는 값 하나를 넣으세요(빈 목록은 "필터 없음"으로 해석됩니다).
+판정은 Claude Code가 하위 프로세스에 내려주는 `CLAUDE_CODE_ENTRYPOINT` 환경변수로 합니다(터미널은 미설정 → `cli`로 해석). `*`는 이름이 없는 화면의 기본값이며, 출하 기본은 `off`라서 Anthropic이 새 화면을 추가해도 이름을 적어 주기 전까지는 조용합니다. 오타 같은 잘못된 모드 값도 `off`로 떨어집니다 — 승인할 수 없는 화면에서 조용히 `block`이 되는 쪽이 훨씬 나쁘기 때문입니다.
 
 지금 쓰는 화면이 무엇으로 보고되는지 확인:
 
 ```powershell
 echo $env:CLAUDE_CODE_ENTRYPOINT
 ```
+
+#### 데스크톱 앱에서 보이는 모습 (`advise`)
+
+Prompt는 그대로 실행되고, 아래 내용이 알림으로만 표시됩니다.
+
+```
+Adaptive Model Router
+
+RECOMMENDATION (not applied)
+
+Current Model: sonnet (last turn, from the session transcript)
+Current Effort: MEDIUM
+
+Recommended: fable
+Effort: XHIGH
+Reason: project-wide analysis, high-impact operation
+
+이 Prompt는 그대로 실행됩니다. 추천을 쓰려면 /model에서 위 모델과 Effort 값을 바꾸세요.
+```
+
+`advise` 모드는 승인 상태를 저장하지 않습니다. 막은 것이 없으니 승인할 것도 없습니다.
+
+#### 이미 최적이면 아무 말도 안 합니다
+
+현재 모델과 Effort가 추천과 **둘 다** 같으면 어떤 모드든 조용히 통과합니다. 이미 맞는 설정을 확인받자고 막으면, 그 화면은 곧 아무 정보도 없는 것으로 학습되기 때문입니다. 단, 모델이나 Effort 중 하나라도 알 수 없으면(세션 첫 Prompt 등) "일치"로 보지 않고 정상 동작합니다 — 없는 것은 같은 것이 아닙니다.
 
 > **Codex는 이 설정과 무관합니다.** Codex 쪽은 패치된 터미널 TUI(`codex-rs/tui/`)에만 들어가므로 ChatGPT 데스크톱 앱에서는 애초에 실행되지 않습니다.
 
@@ -389,8 +417,9 @@ py .\scripts\manage_native_codex.py --install-latest | --status | --install-upda
 | Profile 칸이 `-` 로 나온다 | 그 모델은 아직 어느 등급에도 배정되지 않았습니다. 아래 **설정** 참고 |
 | 모델 목록이 `UNKNOWN` | 해당 CLI의 로컬 카탈로그를 읽지 못한 상태입니다. `codex --version` / `claude --version`으로 CLI 존재부터 확인 |
 | Claude Code가 느려졌다 | Hook `timeout`은 10초이고 기본 경로는 subprocess를 실행하지 않습니다. 그래도 의심되면 `--uninstall` 후 비교 |
-| 데스크톱 앱/VS Code에서 차단 화면이 뜬다 | `hook.claude_entrypoints`에 그 화면 값이 들어 있는지 확인. 기본값은 터미널만 허용합니다 |
-| 터미널인데 Router가 안 뜬다 | `echo $env:CLAUDE_CODE_ENTRYPOINT`로 값을 확인하고 `hook.claude_entrypoints`에 추가 |
+| 데스크톱 앱/VS Code에서 차단 화면이 뜬다 | `hook.claude_modes`에서 그 화면이 `block`으로 되어 있는지 확인. 기본값은 `advise`입니다 |
+| 터미널인데 Router가 안 뜬다 | `echo $env:CLAUDE_CODE_ENTRYPOINT`로 값을 확인하고 `hook.claude_modes`에 `"<값>": "block"` 추가 |
+| 추천이 아예 안 뜬다 | 현재 설정이 이미 추천과 같으면 조용히 통과합니다. `--no-exec --debug`로 추천값을 직접 확인하세요 |
 
 회귀 테스트:
 
@@ -400,7 +429,7 @@ py .\run_tests.py -v
 
 `py -m unittest discover -s tests`로 직접 돌리지 마세요. 그 형태는 `adaptive_model_router`를 `sys.path`에서 찾으므로, 이미 설치된 사본이 있으면 작업 중인 `src/`가 아니라 **그 설치본이 검사 대상**이 됩니다. 그 상태에서는 새로 추가한 테스트만 실패하고 나머지는 통과해서, 빌드가 잘못됐다는 사실이 "새 테스트가 잘못됐다"처럼 보입니다. `run_tests.py`는 `src/`를 앞에 넣고, `tests/test_environment.py`가 어떤 경로로 실행하든 이 조건을 다시 검사해 어긋나면 실행 방법까지 알려주며 실패합니다.
 
-현재 회귀 묶음은 한국어·영어와 단순 편집, 구현, 진단, 광범위 분석, 다중 파일 작업, 위험 작업, 문자열 인용, 명시적 effort 지시를 포함한 **100개 프롬프트**를 검사합니다. 그중 29개는 프로필·reasoning에서 멈추지 않고 실제 Claude alias와 effort까지 확인하며, 프로필 4종 × reasoning 6단계를 모두 덮는지도 테스트가 스스로 검사합니다. 전체 테스트는 **124개**이고, 실행 파일 tier 추출은 실제 222MB 바이너리 대신 합성 fixture로 검사하므로 결과가 이 PC의 설치 상태에 좌우되지 않습니다.
+현재 회귀 묶음은 한국어·영어와 단순 편집, 구현, 진단, 광범위 분석, 다중 파일 작업, 위험 작업, 문자열 인용, 명시적 effort 지시를 포함한 **100개 프롬프트**를 검사합니다. 그중 29개는 프로필·reasoning에서 멈추지 않고 실제 Claude alias와 effort까지 확인하며, 프로필 4종 × reasoning 6단계를 모두 덮는지도 테스트가 스스로 검사합니다. 전체 테스트는 **133개**이고, 실행 파일 tier 추출은 실제 222MB 바이너리 대신 합성 fixture로 검사하므로 결과가 이 PC의 설치 상태에 좌우되지 않습니다.
 
 ## 제거
 
@@ -415,7 +444,7 @@ py -m pip uninstall adaptive-model-router          # Python 패키지 제거
 
 - 저장소 기본값: [`router_config.json`](router_config.json)
 - 설치 후 설정: `%LOCALAPPDATA%\AdaptiveModelRouter\router_config.json`
-- `hook.claude_entrypoints`에서 Router가 동작할 Claude Code 화면 지정 (기본: 터미널만)
+- `hook.claude_modes`에서 Claude Code 화면별 동작 모드 지정 (`block`/`advise`/`off`, `*`는 기본값)
 - 설치된 사용자 설정은 한 번 만들어지면 갱신되지 않습니다. 이후 버전에서 추가된 **dict** 항목(모델 등급, 프로필 pin, directive)은 병합되어 전달되지만 **list** 항목(`rules`)은 통째로 사용자 답이라 병합되지 않습니다. `--list-models`가 버전 차이를 감지해 경고하며, `py -m adaptive_model_router.cli --refresh-config`로 백업 후 교체할 수 있습니다
 - `rules`에서 키워드·점수·위험도·충돌 여부 조정
 - `model_selection.slug_role_patterns`에 신규 모델 역할 패턴 추가
