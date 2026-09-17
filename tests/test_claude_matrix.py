@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -22,6 +23,8 @@ from adaptive_model_router.catalog import (
     CatalogResult,
     ClaudeTier,
     ModelInfo,
+    claude_alias_for_model,
+    claude_model_from_transcript,
     default_family,
     discover_claude_tiers,
     load_claude_catalog,
@@ -442,6 +445,63 @@ class BuildTierExtractionTests(unittest.TestCase):
             path = self._write_build(directory, body=b"an unrelated executable")
             self.assertEqual((), self._discover(path, directory))
 
+    def test_a_huge_transcript_is_read_from_its_end(self) -> None:
+        """Session transcripts reach tens of megabytes and the hook has a 10 s budget."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "big.jsonl"
+            filler = json.dumps({"type": "user", "message": {"role": "user", "content": "x" * 400}})
+            with path.open("w", encoding="utf-8") as handle:
+                for _ in range(4000):
+                    handle.write(filler + "\n")
+                handle.write(json.dumps(
+                    {"type": "assistant", "message": {"role": "assistant", "model": "claude-fable-5-1"}}) + "\n")
+            self.assertGreater(path.stat().st_size, 1 << 20)
+            started = time.monotonic()
+            model = claude_model_from_transcript(path)
+            self.assertLess(time.monotonic() - started, 1.0)
+        self.assertEqual("claude-fable-5-1", model)
+
+    def test_a_transcript_whose_last_turn_is_older_than_the_tail_reports_nothing(self) -> None:
+        """Reading the end means an answer from the end; it never guesses from the start.
+
+        The old entry goes on the *third* line, not the first: the reader drops the first
+        line of its window because a seek lands mid-line, so an entry on line one is
+        discarded whether the window starts at the seek point or at byte zero, and the test
+        passes with the seek removed - which is how the first version of this test behaved.
+        """
+        filler = json.dumps({"type": "user", "message": {"role": "user", "content": "y" * 400}})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "stale.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                handle.write(filler + "\n")
+                handle.write(filler + "\n")
+                handle.write(json.dumps(
+                    {"type": "assistant", "message": {"role": "assistant", "model": "claude-opus-5"}}) + "\n")
+                for _ in range(4000):
+                    handle.write(filler + "\n")
+            # The entry must sit outside the tail window, or this tests nothing.
+            self.assertGreater(path.stat().st_size - 3 * (len(filler) + 1), 262144)
+            self.assertIsNone(claude_model_from_transcript(path))
+
+    def test_a_missing_or_malformed_transcript_is_not_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "absent.jsonl"
+            broken = Path(directory) / "broken.jsonl"
+            broken.write_text("not json\n{\"type\": \"assistant\"}\n", encoding="utf-8")
+            self.assertIsNone(claude_model_from_transcript(missing))
+            self.assertIsNone(claude_model_from_transcript(broken))
+            self.assertIsNone(claude_model_from_transcript(None))
+
+    def test_a_model_id_resolves_to_the_tier_alias(self) -> None:
+        config = load_config(PACKAGED_CONFIG)
+        with _patch_discovery():
+            self.assertEqual("sonnet", claude_alias_for_model("claude-sonnet-5", config))
+            self.assertEqual("fable", claude_alias_for_model("claude-fable-5-1", config))
+            # A version the installed build does not know still resolves by tier name.
+            self.assertEqual("opus", claude_alias_for_model("claude-opus-9", config))
+            self.assertIsNone(claude_alias_for_model("some-other-vendor-model", config))
+            self.assertIsNone(claude_alias_for_model(None, config))
+
     def test_a_missing_executable_yields_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual((), self._discover(Path(directory) / "absent.exe", directory))
@@ -675,6 +735,65 @@ class ClaudeHookMatrixTests(unittest.TestCase):
             )
         self.assertEqual("block", other["decision"])
         self.assertIn("Recommended: opus", other["reason"])
+
+    def _transcript(self, directory: str, *models: str) -> str:
+        """A session transcript in the shape Claude Code writes."""
+        path = Path(directory) / "session.jsonl"
+        lines = [json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}})]
+        for model in models:
+            lines.append(json.dumps({"type": "assistant", "message": {"role": "assistant", "model": model}}))
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return str(path)
+
+    def test_the_current_model_is_read_from_the_session_transcript(self) -> None:
+        """The only live source: no payload field and no CLAUDE_* variable carries it."""
+        with tempfile.TemporaryDirectory() as directory, _patch_discovery():
+            transcript = self._transcript(directory, "claude-opus-5", "claude-sonnet-5")
+            response = self._evaluate(
+                {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘",
+                 "transcript_path": transcript, "source": "user"},
+                directory, current_model=None,
+            )
+        # Reported as the tier alias the router routes by, not the raw id.
+        self.assertIn("Current Model: sonnet (last turn, from the session transcript)", response["reason"])
+
+    def test_the_transcript_beats_a_pinned_setting(self) -> None:
+        """A /model switch changes what runs; settings.json may still say something else."""
+        with tempfile.TemporaryDirectory() as directory, _patch_discovery():
+            transcript = self._transcript(directory, "claude-opus-5")
+            response = self._evaluate(
+                {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "transcript_path": transcript},
+                directory, current_model="haiku",
+            )
+        self.assertIn("Current Model: opus (last turn", response["reason"])
+
+    def test_a_pinned_model_is_used_when_the_transcript_has_no_turn_yet(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _patch_discovery():
+            transcript = self._transcript(directory)  # user turn only
+            response = self._evaluate(
+                {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "transcript_path": transcript},
+                directory, current_model="sonnet",
+            )
+        self.assertIn("Current Model: sonnet (pinned in settings.json)", response["reason"])
+
+    def test_the_first_prompt_of_a_session_says_so_instead_of_guessing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, _patch_discovery():
+            response = self._evaluate(
+                {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "transcript_path": ""},
+                directory, current_model=None,
+            )
+        self.assertIn("Current Model: UNKNOWN (first prompt of the session", response["reason"])
+
+    def test_a_session_already_on_the_right_tier_is_told_to_keep_it(self) -> None:
+        """Resolving to an alias is what makes this comparison possible at all."""
+        with tempfile.TemporaryDirectory() as directory, _patch_discovery():
+            transcript = self._transcript(directory, "claude-sonnet-5")
+            response = self._evaluate(
+                {"session_id": "s", "prompt": "API 연동 기능 구현해줘", "transcript_path": transcript},
+                directory, current_model=None,
+            )
+        self.assertIn("Current Model: sonnet", response["reason"])
+        self.assertIn("Recommended: sonnet", response["reason"])
 
     def test_only_terminal_surfaces_are_interrupted(self) -> None:
         """One settings.json registration fires on every Claude Code surface.

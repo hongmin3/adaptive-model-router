@@ -11,6 +11,8 @@ from typing import Any
 
 from .catalog import (
     LEGACY_FAMILY,
+    claude_alias_for_model,
+    claude_model_from_transcript,
     default_family,
     load_claude_catalog,
     load_current_claude_config,
@@ -43,6 +45,28 @@ TERMINAL_ENTRYPOINTS = ("cli", "ssh-remote", "claude-coworker-terminal")
 
 def _entrypoint() -> str:
     return (os.environ.get("CLAUDE_CODE_ENTRYPOINT") or "cli").strip()
+
+
+def _resolve_claude_model(
+    payload: dict[str, Any], config: dict[str, Any],
+) -> tuple[str | None, str]:
+    """The model this Claude Code session is on, and where that was read from.
+
+    Neither the UserPromptSubmit payload nor any CLAUDE_* variable carries the model, so
+    the session transcript - whose path the payload does hand over - is the only live
+    source.  It is reported as the tier alias the router routes by, so a session already on
+    the right tier is recognised instead of being told to switch to it.  The source is part
+    of the answer: the transcript describes the previous turn, a pinned setting describes
+    every turn, and the two can disagree after a mid-session /model change.
+    """
+    transcript_model = claude_model_from_transcript(payload.get("transcript_path"))
+    if transcript_model:
+        alias = claude_alias_for_model(transcript_model, config)
+        return (alias or transcript_model), "last turn, from the session transcript"
+    pinned, _ = load_current_claude_config()
+    if pinned:
+        return pinned, "pinned in settings.json"
+    return None, ""
 
 
 def _current_effort() -> str | None:
@@ -96,12 +120,17 @@ def _store_approval(path: Path, selection: Selection, result: ScoreResult) -> No
 def _recommendation_reason(
     current_model: str | None, recommendation: Recommendation, result: ScoreResult, debug: bool,
     provider: str = "codex", provider_label: str = "Codex", reasoning_label: str = "Reasoning",
-    current_effort: str | None = None,
+    current_effort: str | None = None, current_source: str = "",
 ) -> str:
     selection: Selection = recommendation.selection
     recommended = selection.model.display_name if selection.model else "KEEP CURRENT"
     if recommendation.label:
         recommended = f"{recommended} ({recommendation.label})"
+    model_line = (
+        f"{current_model} ({current_source})" if current_model and current_source
+        else current_model
+        or "UNKNOWN (first prompt of the session; pin one in settings.json to always show it)"
+    )
     effort_line = current_effort or (
         f"UNKNOWN ({provider_label} does not expose the session effort to this hook)"
     )
@@ -110,7 +139,7 @@ def _recommendation_reason(
         "",
         "MODEL CALL BLOCKED BEFORE EXECUTION",
         "",
-        f"Current Model: {current_model or 'UNKNOWN (pin one in settings.json to show it here)'}",
+        f"Current Model: {model_line}",
         f"Current {reasoning_label}: {effort_line}",
         "",
         f"Recommended: {recommended}",
@@ -167,13 +196,14 @@ def evaluate_hook(
     if provider == "claude":
         # Claude Code's hook payload carries no "model" field, unlike the patched
         # Codex build; the running model has to be read from its own settings file.
-        current_model, _ = load_current_claude_config()
+        current_model, current_source = _resolve_claude_model(payload, router_config)
         # Same family resolution as the CLI path: the per-profile model pins live on the
         # family, so routing without it silently degrades to catalog order.
         active_family = default_family(router_config, provider) or LEGACY_FAMILY
         catalogs = {active_family: load_claude_catalog(config=router_config)}
     else:
         current_model = str(payload.get("model", "")).strip() or None
+        current_source = ""
         active_family, catalogs = resolve_active_catalogs(router_config, current_model)
     recommendation = recommend(
         catalogs,
@@ -194,6 +224,7 @@ def evaluate_hook(
             provider, str(provider_config.get("label", provider.title())),
             str(provider_config.get("reasoning_label", "Reasoning")),
             _current_effort() if provider == "claude" else None,
+            current_source,
         ),
     }
 

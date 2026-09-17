@@ -9,7 +9,7 @@ Prompt를 로컬 규칙으로 분석해 작업 난이도에 맞는 모델과 rea
 | 적용 방식 | 패치된 `codex.exe` (TUI에 Y/N 화면 삽입) | 공식 `UserPromptSubmit` Hook |
 | 설치 필요 | `pip install` + 패치 바이너리 | `pip install` + Hook 등록 (바이너리 패치 불필요) |
 | 모델 후보 | `~/.codex/models_cache.json` 등 로컬 카탈로그 | Claude Code 빌드의 tier 표 |
-| 현재 모델 읽는 곳 | `~/.codex/config.toml` | `~/.claude/settings.json` |
+| 현재 모델 읽는 곳 | `~/.codex/config.toml` | 세션 transcript → `~/.claude/settings.json` |
 | 승인 상태 저장 | `~/.codex/adaptive-model-router/state` | `~/.claude/adaptive-model-router/state` |
 
 공유하는 것은 Python 패키지와 `router_config.json`(점수 규칙) 뿐입니다. **선택은 언제나 현재 실행 중인 provider 안에서만 이뤄지며, provider를 자동으로 바꾸지 않습니다.** 한쪽만 설치해도 되고, 둘 다 설치해도 서로 간섭하지 않습니다.
@@ -104,11 +104,26 @@ Claude Code 2.1.274에서 실제 Hook 호출을 캡처해 확인한 결과입니
 | | 얻을 수 있나 | 출처 |
 |---|---|---|
 | 현재 **Effort** | **가능** | `CLAUDE_EFFORT` 환경변수 (`max` 등). Claude Code가 모든 Hook 명령에 내려줍니다 |
-| 현재 **모델** | 불가능 | Hook 입력 JSON에도, 환경변수에도 없습니다 |
+| 현재 **모델** | **가능** | Hook payload가 주는 `transcript_path`의 마지막 assistant 항목 (`message.model`) |
 
-`UserPromptSubmit`의 payload 키는 `session_id`, `transcript_path`, `cwd`, `prompt`, `prompt_id`, `permission_mode`, `scratchpad_dir`, `hook_event_name`이 전부입니다. `effort`는 tool-use 컨텍스트 Hook(`PreToolUse` 등)에만 들어가고 `UserPromptSubmit`에는 없지만, 같은 값이 `CLAUDE_EFFORT`로 노출되므로 Router는 그쪽에서 읽습니다.
+```
+Current Model: sonnet (last turn, from the session transcript)
+Current Effort: MAX
+```
 
-모델은 사용자가 `~/.claude/settings.json`에 `"model"`을 고정해 둔 경우에만 표시되고, 그렇지 않으면 `Current Model: UNKNOWN`입니다. 이건 데스크톱 앱만의 제약이 아니라 터미널에서도 같습니다.
+`UserPromptSubmit`의 payload 키는 `session_id`, `transcript_path`, `cwd`, `prompt`, `prompt_id`, `permission_mode`, `scratchpad_dir`, `hook_event_name`이 전부입니다. **모델 필드는 없고**, Hook 프로세스가 받는 26개 `CLAUDE_*` 환경변수에도 모델은 없습니다(전수 확인). `effort`도 payload에는 없지만 `CLAUDE_EFFORT`로 노출됩니다.
+
+그래서 모델은 **세션 transcript**에서 읽습니다. Claude Code는 모든 Hook에 `transcript_path`를 넘기고, transcript의 assistant 항목마다 실제 사용 모델이 `claude-sonnet-5` 같은 ID로 기록돼 있습니다. Router는 파일 끝 256KB만 역방향으로 훑어 마지막 항목을 찾고(67MB 파일에서 약 2.5ms), 그 ID를 tier alias(`sonnet`)로 바꿔 추천과 비교합니다. alias로 바꾸는 이유는, 그러지 않으면 이미 맞는 등급에 있는 세션에게 같은 등급으로 바꾸라고 하게 되기 때문입니다.
+
+조회 순서와 각 출처의 의미:
+
+| 순서 | 출처 | 표시 | 의미 |
+|---|---|---|---|
+| 1 | 세션 transcript | `sonnet (last turn, from the session transcript)` | **직전 턴**에 실제로 답한 모델 |
+| 2 | `~/.claude/settings.json`의 `model` | `sonnet (pinned in settings.json)` | 고정해 둔 모델 (모든 턴) |
+| 3 | 없음 | `UNKNOWN (first prompt of the session...)` | 세션 첫 프롬프트라 아직 기록이 없음 |
+
+한계는 정직하게: transcript는 *직전 턴*을 말하므로 세션 첫 프롬프트에서는 비어 있고, 세션 도중 `/model`로 바꾸면 그 다음 턴이 지나기 전까지 한 턴 늦게 반영됩니다. 항상 확정값을 보고 싶으면 `settings.json`에 `"model"`을 고정하세요.
 
 `payload`에 `source` 필드도 없습니다(2.1.274 실측). Router의 `source != "user"` 통과 규칙은 현재 발동하지 않으며, 예약 실행·SDK 호출은 위의 entrypoint 필터가 대신 걸러냅니다.
 
@@ -238,7 +253,7 @@ Adaptive Model Router
 
 MODEL CALL BLOCKED BEFORE EXECUTION
 
-Current Model: UNKNOWN (pin one in settings.json to show it here)
+Current Model: sonnet (last turn, from the session transcript)
 Current Effort: MAX
 
 Recommended: fable
@@ -385,7 +400,7 @@ py .\run_tests.py -v
 
 `py -m unittest discover -s tests`로 직접 돌리지 마세요. 그 형태는 `adaptive_model_router`를 `sys.path`에서 찾으므로, 이미 설치된 사본이 있으면 작업 중인 `src/`가 아니라 **그 설치본이 검사 대상**이 됩니다. 그 상태에서는 새로 추가한 테스트만 실패하고 나머지는 통과해서, 빌드가 잘못됐다는 사실이 "새 테스트가 잘못됐다"처럼 보입니다. `run_tests.py`는 `src/`를 앞에 넣고, `tests/test_environment.py`가 어떤 경로로 실행하든 이 조건을 다시 검사해 어긋나면 실행 방법까지 알려주며 실패합니다.
 
-현재 회귀 묶음은 한국어·영어와 단순 편집, 구현, 진단, 광범위 분석, 다중 파일 작업, 위험 작업, 문자열 인용, 명시적 effort 지시를 포함한 **100개 프롬프트**를 검사합니다. 그중 29개는 프로필·reasoning에서 멈추지 않고 실제 Claude alias와 effort까지 확인하며, 프로필 4종 × reasoning 6단계를 모두 덮는지도 테스트가 스스로 검사합니다. 전체 테스트는 **115개**이고, 실행 파일 tier 추출은 실제 222MB 바이너리 대신 합성 fixture로 검사하므로 결과가 이 PC의 설치 상태에 좌우되지 않습니다.
+현재 회귀 묶음은 한국어·영어와 단순 편집, 구현, 진단, 광범위 분석, 다중 파일 작업, 위험 작업, 문자열 인용, 명시적 effort 지시를 포함한 **100개 프롬프트**를 검사합니다. 그중 29개는 프로필·reasoning에서 멈추지 않고 실제 Claude alias와 effort까지 확인하며, 프로필 4종 × reasoning 6단계를 모두 덮는지도 테스트가 스스로 검사합니다. 전체 테스트는 **124개**이고, 실행 파일 tier 추출은 실제 222MB 바이너리 대신 합성 fixture로 검사하므로 결과가 이 PC의 설치 상태에 좌우되지 않습니다.
 
 ## 제거
 

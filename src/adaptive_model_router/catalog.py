@@ -352,6 +352,73 @@ def load_current_claude_config(path: Path | None = None) -> tuple[str | None, st
         return None, None
 
 
+def _tail_lines(path: Path, limit: int = 262144) -> list[str]:
+    """The last chunk of a file, as whole lines.
+
+    Session transcripts reach tens of megabytes, and the hook has a ten second budget, so
+    this seeks to the end instead of reading the file.  The first line of the chunk is
+    dropped because a mid-file seek lands inside a line.
+    """
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - limit))
+            blob = handle.read()
+    except OSError:
+        return []
+    text = blob.decode("utf-8", "replace")
+    lines = text.splitlines()
+    return lines[1:] if size > limit and len(lines) > 1 else lines
+
+
+def claude_model_from_transcript(transcript_path: str | Path | None) -> str | None:
+    """The model that produced the most recent assistant turn of this session.
+
+    Claude Code hands every hook a `transcript_path`, and each assistant entry records the
+    model it ran on.  This is the only place the running model is observable from a
+    UserPromptSubmit hook: the payload has no model field and none of the CLAUDE_* variables
+    carries one.  It reports the *previous* turn, so it is empty on a session's first prompt
+    and lags one turn after the model is changed mid-session.
+    """
+    if not transcript_path:
+        return None
+    for line in reversed(_tail_lines(Path(transcript_path))):
+        if '"model"' not in line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get("type") != "assistant":
+            continue
+        message = entry.get("message")
+        model = message.get("model") if isinstance(message, dict) else None
+        if isinstance(model, str) and model:
+            return model
+    return None
+
+
+def claude_alias_for_model(model_id: str | None, config: dict[str, Any] | None,
+                           command: str = "claude") -> str | None:
+    """Map a concrete model id (claude-sonnet-5) onto the tier alias the router routes by.
+
+    Without this the recommendation is compared against an id the catalog never contains,
+    so a session already on the right tier is told to switch to it.
+    """
+    if not model_id:
+        return None
+    lowered = model_id.casefold()
+    for tier in discover_claude_tiers(command):
+        if tier.model_id and tier.model_id.casefold() == lowered:
+            return tier.alias
+    configured = _claude_provider(config).get("verified_alias_families", {})
+    for alias in configured:
+        if alias.casefold() in lowered:
+            return alias
+    return None
+
+
 def load_status_overrides(path: Path | None, provider: str = "codex") -> dict[str, dict[str, Any]]:
     if path is None:
         return {}
