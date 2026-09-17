@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "defaults": {
     "score": 5,
     "model_score": 2,
@@ -26,7 +26,9 @@
       "LOW": ["reasoning low", "low로 해", "사용량 아껴", "빠르게 해"],
       "MEDIUM": ["reasoning medium", "medium으로 해", "medium으로 실행"],
       "HIGH": ["reasoning high", "high로 해", "정확도가 제일 중요"],
-      "XHIGH": ["reasoning xhigh", "xhigh로 해"]
+      "XHIGH": ["reasoning xhigh", "xhigh로 해"],
+      "MAX": ["reasoning max", "effort max", "max로 해", "최고 성능으로"],
+      "ULTRA": ["reasoning ultra", "effort ultra", "ultra로 해"]
     }
   },
   "rules": [
@@ -37,8 +39,8 @@
       "model_score": -2,
       "confidence_conflict": false,
       "all_of": [
-        ["오타", "문구", "한 줄", "한줄", "파일명", "변수명", "번역", "markdown", "readme", "문자열 검색", "명령 실행"],
-        ["수정", "변경", "추가", "정리", "바꿔", "번역", "검색", "실행"]
+        ["오타", "오탈자", "문구", "한 줄", "한줄", "파일명", "변수명", "번역", "markdown", "readme", "문자열 검색", "명령 실행"],
+        ["수정", "변경", "추가", "정리", "바꿔", "고쳐", "번역", "검색", "실행"]
       ],
       "none_of": ["프로젝트 전체", "전체 구조", "모든 파일", "전수", "대규모", "여러 모듈", "근본 원인"]
     },
@@ -211,10 +213,24 @@
     "claude": {
       "label": "Claude Code",
       "reasoning_label": "Effort",
+      "default_family": "anthropic",
+      "default_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "families": {
+        "anthropic": {
+          "label": "",
+          "profile_models": {
+            "FAST": ["haiku"],
+            "BALANCED": ["sonnet"],
+            "STRONG": ["opus"],
+            "MAX": ["fable"]
+          }
+        }
+      },
       "verified_alias_families": {
-        "haiku": {"profile": "FAST", "description": "fast affordable"},
-        "sonnet": {"profile": "BALANCED", "description": "balanced everyday"},
-        "opus": {"profile": "STRONG", "description": "reliable complex demanding"}
+        "haiku": {"profile": "FAST", "description": "Fastest for quick answers"},
+        "sonnet": {"profile": "BALANCED", "description": "Most efficient for everyday tasks"},
+        "opus": {"profile": "STRONG", "description": "Most capable for ambitious work"},
+        "fable": {"profile": "MAX", "description": "For your toughest challenges"}
       }
     }
   },

@@ -32,7 +32,7 @@ git -C upstream-codex apply --3way .\codex-patches\adaptive-router.patch
 - `cargo fmt --all -- --check`
 - `cargo check -p codex-tui`
 - 관련 Codex TUI test
-- `py -m unittest discover -s tests -v`
+- `py .\run_tests.py -v` (설치본이 아니라 작업 중인 `src/`를 검사한다. `py -m unittest discover -s tests`는 설치된 사본을 검사하므로 쓰지 않는다)
 - Y/N에서 원래 Prompt가 정확히 한 번 제출되는지 확인
 - Router/Python 오류에서 Codex가 fail-open 하는지 확인
 - zip checksum과 설치 후 `codex --version` 확인

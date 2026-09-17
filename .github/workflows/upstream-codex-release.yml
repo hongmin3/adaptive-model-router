@@ -72,8 +72,7 @@ jobs:
         shell: pwsh
         run: |
           py -m pip install -e .
-          $env:PYTHONPATH = "$pwd\src;$pwd"
-          py -m unittest discover -s tests -v
+          py .\run_tests.py -v
       - name: Download matching official Windows runtime
         shell: pwsh
         run: |

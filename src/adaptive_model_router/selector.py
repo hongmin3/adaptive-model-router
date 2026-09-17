@@ -7,6 +7,21 @@ from typing import Any
 from .catalog import CatalogResult, ModelInfo
 
 
+# Why a model ended up selected.  NO_EVIDENCE means nothing in the configuration
+# said this model serves this profile and the ranking fell through to catalog
+# order, which is display metadata and carries no capability meaning.
+PINNED = "pinned"
+SLUG_ROLE = "slug-role"
+DESCRIPTION_HINT = "description-hint"
+FALLBACK_PROFILE = "fallback-profile"
+FORCED_CURRENT = "forced-current"
+KEPT_CURRENT = "kept-current"
+NO_EVIDENCE = "no-evidence"
+
+# Cheapest to most capable; the order a listing walks and a tie is broken in.
+PROFILE_ORDER = ("FAST", "BALANCED", "STRONG", "MAX")
+
+
 @dataclass(frozen=True)
 class Selection:
     model: ModelInfo | None
@@ -16,6 +31,7 @@ class Selection:
     reset: str | None = None
     fallback_from: str | None = None
     note: str = ""
+    evidence: str = NO_EVIDENCE
 
 
 @dataclass(frozen=True)
@@ -27,6 +43,7 @@ class Counterpart:
     model: ModelInfo
     reasoning: str
     note: str = ""
+    evidence: str = NO_EVIDENCE
 
 
 @dataclass(frozen=True)
@@ -64,6 +81,61 @@ def _preferred_slugs(profile: str, family: dict[str, Any] | None) -> list[str]:
     return [str(slug).casefold() for slug in (family or {}).get("profile_models", {}).get(profile, [])]
 
 
+def _pinned_profiles(model: ModelInfo, family: dict[str, Any] | None) -> set[str]:
+    """Every profile this family pins the model to; empty when the family pins nothing for it."""
+    pins = (family or {}).get("profile_models", {})
+    slug = model.slug.casefold()
+    return {
+        profile for profile, slugs in pins.items()
+        if slug in [str(value).casefold() for value in slugs]
+    }
+
+
+def profile_evidence(
+    model: ModelInfo, profile: str, config: dict[str, Any], family: dict[str, Any] | None = None,
+) -> str:
+    """What made this model a candidate for this profile - NO_EVIDENCE if nothing did.
+
+    A ranker always returns a first element, so it cannot signal that it had no basis for
+    choosing one; without this, an unmatched profile silently resolves to whatever the
+    catalog happens to list first.
+    """
+    if model.slug.casefold() in _preferred_slugs(profile, family):
+        return PINNED
+    if _slug_role_score(model, profile, config):
+        return SLUG_ROLE
+    if _hint_score(model, config["model_selection"]["description_hints"].get(profile, [])):
+        return DESCRIPTION_HINT
+    return NO_EVIDENCE
+
+
+def classify_model(
+    model: ModelInfo, config: dict[str, Any], family: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """The profile(s) this model is configured to serve, and the evidence that says so.
+
+    Deliberately reuses the ranker's own scoring rather than re-deriving it: a listing
+    that asks "does any criterion match" instead of "which criterion wins" reports the
+    wrong tier wherever a secondary keyword matches a neighbouring profile - the GPT model
+    described as "most capable for complex, demanding work" answers to STRONG's weak hints
+    and to MAX's defining one, and only the comparison picks MAX.
+    """
+    pinned = _pinned_profiles(model, family)
+    if pinned:
+        return "/".join(profile for profile in PROFILE_ORDER if profile in pinned), PINNED
+    best_profile, best_score, best_evidence = "", 0, NO_EVIDENCE
+    hints = config["model_selection"]["description_hints"]
+    for profile in PROFILE_ORDER:
+        slug_score = _slug_role_score(model, profile, config)
+        hint_score = _hint_score(model, hints.get(profile, []))
+        score = max(slug_score, hint_score)
+        if score > best_score:
+            best_profile = profile
+            best_score = score
+            best_evidence = SLUG_ROLE if slug_score >= hint_score else DESCRIPTION_HINT
+    return (best_profile, best_evidence) if best_profile else ("", NO_EVIDENCE)
+
+
 def _rank_for_profile(
     models: list[ModelInfo], profile: str, config: dict[str, Any], family: dict[str, Any] | None = None,
 ) -> list[ModelInfo]:
@@ -88,8 +160,13 @@ def _rank_for_profile(
 def _fits_profile(
     model: ModelInfo, profile: str, config: dict[str, Any], family: dict[str, Any] | None = None,
 ) -> bool:
-    if model.slug.casefold() in _preferred_slugs(profile, family):
-        return True
+    # A family that pins a model to a profile has answered the question for that model:
+    # the CLI's own tier wording often matches a neighbouring profile's hint (Claude's
+    # "Most capable for ambitious work" reads as MAX while it is the STRONG tier), and
+    # letting the hint win there keeps the wrong current model instead of upgrading it.
+    pinned = _pinned_profiles(model, family)
+    if pinned:
+        return profile in pinned
     hints = config["model_selection"]["description_hints"].get(profile, [])
     # Keeping the current model on a secondary word caused Sol to satisfy
     # BALANCED via "everyday" and Astra to satisfy STRONG via "complex".
@@ -138,19 +215,25 @@ def select_model(
     current = next((model for model in available if model.slug == current_model), None)
     if current and (force_current or _fits_profile(current, profile, config, family)):
         chosen = current
+        evidence = FORCED_CURRENT if force_current else KEPT_CURRENT
     else:
         preferred_rank = _rank_for_profile(eligible, profile, config, family)
         preferred = preferred_rank[0]
         if preferred in available:
             chosen = preferred
+            evidence = profile_evidence(chosen, profile, config, family)
         else:
             chosen = None
+            evidence = NO_EVIDENCE
             for fallback_profile in config["model_selection"].get("fallback_profiles", {}).get(profile, []):
                 candidates = [model for model in available if _fits_profile(model, fallback_profile, config, family)]
                 if candidates:
                     chosen = _rank_for_profile(candidates, fallback_profile, config, family)[0]
+                    evidence = FALLBACK_PROFILE
                     break
-            chosen = chosen or _rank_for_profile(available, profile, config, family)[0]
+            if chosen is None:
+                chosen = _rank_for_profile(available, profile, config, family)[0]
+                evidence = profile_evidence(chosen, profile, config, family)
 
     tie_break = config["model_selection"].get("reasoning_tie_break", "up")
     adjusted = _nearest_effort(requested, chosen.efforts, config["reasoning_order"], tie_break)
@@ -161,6 +244,7 @@ def select_model(
     return Selection(
         chosen, adjusted, requested, "AVAILABLE", reset=state.get("reset"), fallback_from=fallback_from,
         note=(f"{requested.upper()} is unsupported; using {adjusted.upper()}." if adjusted != requested else ""),
+        evidence=evidence,
     )
 
 
@@ -192,6 +276,7 @@ def select_counterparts(
             model=selection.model,
             reasoning=selection.reasoning,
             note=selection.note,
+            evidence=selection.evidence,
         ))
     return tuple(counterparts)
 
