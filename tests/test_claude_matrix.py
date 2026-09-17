@@ -1033,6 +1033,21 @@ class ClaudeHookMatrixTests(unittest.TestCase):
         self.assertEqual(1, len(remaining))
         self.assertNotIn(stale[0].name, [path.name for path in remaining])
 
+    def test_approvals_left_by_earlier_sessions_are_swept_too(self) -> None:
+        """Approvals are filed per session, so a sweep of only the current one never
+        reaches the sessions that already ended - which is every session that leaked."""
+        with tempfile.TemporaryDirectory() as directory:
+            old_session = Path(directory) / "0123456789abcdef0123"
+            old_session.mkdir()
+            leaked = old_session / ("a" * 64 + ".json")
+            leaked.write_text('{"created_at": 0}', encoding="utf-8")
+            stale = time.time() - 10_000
+            os.utime(leaked, (stale, stale))
+            self._evaluate({"session_id": "new", "prompt": "프로젝트 전체를 분석해줘"}, directory)
+            self.assertFalse(leaked.exists())
+            self.assertFalse(old_session.exists(), "an emptied session directory must go too")
+            self.assertEqual(1, len(list(Path(directory).rglob("*.json"))))
+
     def test_a_fresh_approval_is_not_swept_by_a_later_prompt(self) -> None:
         """The sweep must not eat the approval the user is about to resubmit."""
         with tempfile.TemporaryDirectory() as directory:

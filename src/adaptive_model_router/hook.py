@@ -142,23 +142,31 @@ def _consume_approval(path: Path, ttl_seconds: int) -> bool:
         return False
 
 
-def _prune_approvals(directory: Path, ttl_seconds: int) -> None:
-    """Drop approvals that can no longer be consumed.
+def _prune_approvals(root: Path, ttl_seconds: int) -> None:
+    """Drop approvals that can no longer be consumed, across every session.
 
     `_consume_approval` deletes only what it reads, so every recommendation the user walked
     away from - a different prompt, a closed session - stays on disk for good.  The sweep
     rides inside the write that creates the next one rather than sitting beside it as a
     separate duty, so it cannot be skipped while approvals are still being written.
+
+    It walks the whole state root, not just the session being written: approvals are filed
+    per session directory, so a sweep scoped to the current one can never reach the sessions
+    that have already ended - which is every session that leaked. Empty directories go too,
+    or the leak just changes shape from files to directories.
     """
     cutoff = time.time() - max(ttl_seconds, 0)
     try:
-        entries = list(directory.iterdir())
+        sessions = [entry for entry in root.iterdir() if entry.is_dir()]
     except OSError:
         return
-    for entry in entries:
+    for session in sessions:
         try:
-            if entry.is_file() and entry.stat().st_mtime < cutoff:
-                entry.unlink(missing_ok=True)
+            for entry in session.iterdir():
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    entry.unlink(missing_ok=True)
+            if next(session.iterdir(), None) is None:
+                session.rmdir()
         except OSError:
             continue
 
@@ -166,8 +174,8 @@ def _prune_approvals(directory: Path, ttl_seconds: int) -> None:
 def _store_approval(
     path: Path, selection: Selection, result: ScoreResult, ttl_seconds: int = 600,
 ) -> None:
+    _prune_approvals(path.parent.parent, ttl_seconds)
     path.parent.mkdir(parents=True, exist_ok=True)
-    _prune_approvals(path.parent, ttl_seconds)
     payload = {
         "created_at": time.time(),
         "recommended_model": selection.model.slug if selection.model else None,
