@@ -25,6 +25,35 @@ from .selector import Recommendation, Selection, recommend
 # Blocking those stalls work that has no human present to answer the Y/N confirmation,
 # so the gate below admits only source == "user" rather than listing what to skip: an
 # allow-list of skippable sources would block every source added after it was written.
+# Measured on Claude Code 2.1.274: the UserPromptSubmit payload carries no `source` field
+# at all, so that gate is currently inert and the entrypoint gate below does the work.
+
+# One hook registration in ~/.claude/settings.json fires on every Claude Code surface -
+# terminal, desktop app, IDE extension, SDK - because settings.json is user-scoped, not
+# per-surface.  Only a terminal session has someone who can answer the confirmation by
+# resubmitting, so everything else is passed straight through.
+#
+# Claude Code's launchers set CLAUDE_CODE_ENTRYPOINT (measured: "claude-desktop" in the
+# desktop app, "sdk-cli" under `claude --print`); a plain terminal session leaves it unset,
+# which the CLI's own code reads as `CLAUDE_CODE_ENTRYPOINT ?? "cli"`.  This is an
+# allow-list on purpose: a deny-list of known GUI surfaces would admit every surface added
+# after it was written, and the whole point is not to interrupt those.
+TERMINAL_ENTRYPOINTS = ("cli", "ssh-remote", "claude-coworker-terminal")
+
+
+def _entrypoint() -> str:
+    return (os.environ.get("CLAUDE_CODE_ENTRYPOINT") or "cli").strip()
+
+
+def _current_effort() -> str | None:
+    """The effort level Claude Code is actually running this turn.
+
+    The UserPromptSubmit payload has no effort field, but Claude Code exports the active
+    level to every hook command as CLAUDE_EFFORT (measured present in both the desktop app
+    and a CLI run), so the recommendation can be compared against the current setting
+    instead of reporting UNKNOWN.
+    """
+    return (os.environ.get("CLAUDE_EFFORT") or "").strip().upper() or None
 
 
 def _state_root(provider: str = "codex") -> Path:
@@ -67,18 +96,22 @@ def _store_approval(path: Path, selection: Selection, result: ScoreResult) -> No
 def _recommendation_reason(
     current_model: str | None, recommendation: Recommendation, result: ScoreResult, debug: bool,
     provider: str = "codex", provider_label: str = "Codex", reasoning_label: str = "Reasoning",
+    current_effort: str | None = None,
 ) -> str:
     selection: Selection = recommendation.selection
     recommended = selection.model.display_name if selection.model else "KEEP CURRENT"
     if recommendation.label:
         recommended = f"{recommended} ({recommendation.label})"
+    effort_line = current_effort or (
+        f"UNKNOWN ({provider_label} does not expose the session effort to this hook)"
+    )
     lines = [
         "Adaptive Model Router",
         "",
         "MODEL CALL BLOCKED BEFORE EXECUTION",
         "",
-        f"Current Model: {current_model or 'UNKNOWN'}",
-        f"Current {reasoning_label}: UNKNOWN ({provider_label} hook input does not expose the session effort)",
+        f"Current Model: {current_model or 'UNKNOWN (pin one in settings.json to show it here)'}",
+        f"Current {reasoning_label}: {effort_line}",
         "",
         f"Recommended: {recommended}",
         f"{reasoning_label}: {selection.reasoning.upper()}",
@@ -112,7 +145,13 @@ def evaluate_hook(
     session_id = str(payload.get("session_id", "unknown-session"))
     if not prompt:
         return {"continue": True}
+
+    router_config = config or load_config()
+    hook_config = router_config.get("hook", {})
     if provider == "claude":
+        allowed = hook_config.get("claude_entrypoints", list(TERMINAL_ENTRYPOINTS))
+        if allowed and _entrypoint() not in allowed:
+            return {"continue": True}
         # Real Claude Code fires UserPromptSubmit for prompts the user never typed
         # (scheduled wakeups, SDK/subagent calls); only a "user" prompt has someone
         # present to answer the Y/N confirmation, so anything else must pass through.
@@ -120,8 +159,6 @@ def evaluate_hook(
         if source != "user":
             return {"continue": True}
 
-    router_config = config or load_config()
-    hook_config = router_config.get("hook", {})
     approval_path = _approval_path(session_id, prompt, provider)
     if _consume_approval(approval_path, int(hook_config.get("approval_ttl_seconds", 600))):
         return {"continue": True}
@@ -156,6 +193,7 @@ def evaluate_hook(
             current_model, recommendation, result, bool(hook_config.get("debug", False)),
             provider, str(provider_config.get("label", provider.title())),
             str(provider_config.get("reasoning_label", "Reasoning")),
+            _current_effort() if provider == "claude" else None,
         ),
     }
 

@@ -10,6 +10,7 @@ the full prompt -> profile -> model -> effort path and states the model alias li
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -630,6 +631,8 @@ class ClaudeHookMatrixTests(unittest.TestCase):
         cls.config = load_config(PACKAGED_CONFIG)
 
     def _evaluate(self, payload: dict, directory: str, current_model: str | None = "sonnet") -> dict:
+        # tests/__init__.py clears CLAUDE_CODE_ENTRYPOINT for the whole suite, so an unset
+        # variable here means "terminal", which is Claude Code's own default reading.
         with patch.dict("os.environ", {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory}), patch(
             "adaptive_model_router.hook.load_current_claude_config", return_value=(current_model, None),
         ):
@@ -672,6 +675,97 @@ class ClaudeHookMatrixTests(unittest.TestCase):
             )
         self.assertEqual("block", other["decision"])
         self.assertIn("Recommended: opus", other["reason"])
+
+    def test_only_terminal_surfaces_are_interrupted(self) -> None:
+        """One settings.json registration fires on every Claude Code surface.
+
+        Entrypoints measured on 2.1.274: the desktop app reports "claude-desktop" and
+        `claude --print` reports "sdk-cli"; a plain terminal leaves the variable unset,
+        which Claude Code itself reads as "cli".
+        """
+        cases = {
+            "cli": "block", "ssh-remote": "block", "claude-coworker-terminal": "block",
+            "claude-desktop": "continue", "claude-desktop-3p": "continue",
+            "claude-vscode": "continue", "sdk-ts": "continue", "sdk-py": "continue",
+            "sdk-cli": "continue", "remote_desktop": "continue", "remote_mobile": "continue",
+            "claude-in-teams": "continue", "claude_in_slack": "continue",
+            "local-agent": "continue", "mcp": "continue",
+            # A surface Anthropic adds later is not in the allow-list, so it is left alone.
+            "some-future-surface": "continue",
+        }
+        for entrypoint, expected in cases.items():
+            with self.subTest(entrypoint=entrypoint), tempfile.TemporaryDirectory() as directory:
+                with patch.dict("os.environ", {"CLAUDE_CODE_ENTRYPOINT": entrypoint}):
+                    response = self._evaluate(
+                        {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
+                        directory,
+                    )
+                self.assertEqual(expected, response.get("decision", "continue"))
+
+    def test_an_unset_entrypoint_is_treated_as_the_terminal(self) -> None:
+        """A plain `claude` session sets nothing; Claude Code's own default is "cli"."""
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_ENTRYPOINT"}
+            with patch.dict("os.environ", environment, clear=True):
+                response = self._evaluate(
+                    {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"}, directory,
+                )
+        self.assertEqual("block", response["decision"])
+
+    def test_the_allowed_surfaces_are_configurable(self) -> None:
+        config = dict(self.config, hook=dict(self.config["hook"], claude_entrypoints=["claude-desktop"]))
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            "os.environ",
+            {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory, "CLAUDE_CODE_ENTRYPOINT": "claude-desktop"},
+        ), patch("adaptive_model_router.hook.load_current_claude_config", return_value=("sonnet", None)):
+            response = evaluate_hook(
+                {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
+                config, provider="claude",
+            )
+        self.assertEqual("block", response["decision"])
+
+    def test_the_codex_provider_is_not_gated_on_the_claude_entrypoint(self) -> None:
+        """Codex reaches the router through a patched terminal TUI, never through a GUI."""
+        model = ModelInfo("gpt-5.6-luna", "GPT-5.6-Luna", "Fast and affordable agentic coding model.",
+                          ("low", "medium"), 1)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            "os.environ",
+            {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory, "CLAUDE_CODE_ENTRYPOINT": "claude-desktop"},
+        ), patch(
+            "adaptive_model_router.hook.resolve_active_catalogs",
+            return_value=("openai", {"openai": CatalogResult("AVAILABLE", (model,))}),
+        ):
+            response = evaluate_hook(
+                {"session_id": "s", "prompt": "README 오타 수정해줘", "model": "gpt-5.6-luna"},
+                self.config,
+            )
+        self.assertEqual("block", response["decision"])
+
+    def test_the_current_effort_is_read_from_the_environment(self) -> None:
+        """The payload has no effort field, but Claude Code exports CLAUDE_EFFORT."""
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            "os.environ",
+            {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory,
+             "CLAUDE_CODE_ENTRYPOINT": "cli", "CLAUDE_EFFORT": "max"},
+        ), patch("adaptive_model_router.hook.load_current_claude_config", return_value=("sonnet", None)):
+            response = evaluate_hook(
+                {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
+                self.config, provider="claude",
+            )
+        self.assertIn("Current Effort: MAX", response["reason"])
+
+    def test_a_missing_effort_variable_says_unknown_rather_than_guessing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {k: v for k, v in os.environ.items() if k != "CLAUDE_EFFORT"}
+            environment.update(ADAPTIVE_MODEL_ROUTER_STATE_DIR=directory, CLAUDE_CODE_ENTRYPOINT="cli")
+            with patch.dict("os.environ", environment, clear=True), patch(
+                "adaptive_model_router.hook.load_current_claude_config", return_value=("sonnet", None),
+            ):
+                response = evaluate_hook(
+                    {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
+                    self.config, provider="claude",
+                )
+        self.assertIn("Current Effort: UNKNOWN", response["reason"])
 
     def test_prompts_the_user_did_not_type_pass_straight_through(self) -> None:
         # Blocking these stalls work with nobody present to answer the confirmation.
