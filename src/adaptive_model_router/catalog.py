@@ -372,31 +372,49 @@ def _tail_lines(path: Path, limit: int = 262144) -> list[str]:
     return lines[1:] if size > limit and len(lines) > 1 else lines
 
 
-def claude_model_from_transcript(transcript_path: str | Path | None) -> str | None:
-    """The model that produced the most recent assistant turn of this session.
+def _last_assistant_entry(transcript_path: str | Path | None) -> dict[str, Any] | None:
+    """The most recent assistant entry of a session transcript, or None.
 
-    Claude Code hands every hook a `transcript_path`, and each assistant entry records the
-    model it ran on.  This is the only place the running model is observable from a
-    UserPromptSubmit hook: the payload has no model field and none of the CLAUDE_* variables
-    carries one.  It reports the *previous* turn, so it is empty on a session's first prompt
-    and lags one turn after the model is changed mid-session.
+    Claude Code hands every hook a `transcript_path`, and each assistant entry records both
+    the model it ran on and the effort it ran at.  This is the only place either is
+    observable from a UserPromptSubmit hook: the payload carries neither, and the
+    CLAUDE_EFFORT variable the docs mention is populated for tool-use context hooks, not
+    this one - measured absent in a real terminal session.
     """
     if not transcript_path:
         return None
     for line in reversed(_tail_lines(Path(transcript_path))):
-        if '"model"' not in line:
+        if '"assistant"' not in line:
             continue
         try:
             entry = json.loads(line)
         except ValueError:
             continue
-        if entry.get("type") != "assistant":
-            continue
-        message = entry.get("message")
-        model = message.get("model") if isinstance(message, dict) else None
-        if isinstance(model, str) and model:
-            return model
+        if entry.get("type") == "assistant":
+            return entry
     return None
+
+
+def claude_last_turn(transcript_path: str | Path | None) -> tuple[str | None, str | None]:
+    """(model, effort) of the session's most recent completed turn.
+
+    Reports the *previous* turn, so it is empty on a session's first prompt and lags one
+    turn after either setting is changed mid-session.
+    """
+    entry = _last_assistant_entry(transcript_path)
+    if entry is None:
+        return None, None
+    message = entry.get("message")
+    model = message.get("model") if isinstance(message, dict) else None
+    effort = entry.get("effort")
+    return (
+        model if isinstance(model, str) and model else None,
+        effort.strip().upper() if isinstance(effort, str) and effort.strip() else None,
+    )
+
+
+def claude_model_from_transcript(transcript_path: str | Path | None) -> str | None:
+    return claude_last_turn(transcript_path)[0]
 
 
 def claude_alias_for_model(model_id: str | None, config: dict[str, Any] | None,

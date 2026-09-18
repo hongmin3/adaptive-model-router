@@ -12,7 +12,7 @@ from typing import Any
 from .catalog import (
     LEGACY_FAMILY,
     claude_alias_for_model,
-    claude_model_from_transcript,
+    claude_last_turn,
     default_family,
     load_claude_catalog,
     load_current_claude_config,
@@ -85,9 +85,9 @@ def _already_recommended(
     )
 
 
-def _resolve_claude_model(
+def _resolve_claude_session(
     payload: dict[str, Any], config: dict[str, Any],
-) -> tuple[str | None, str]:
+) -> tuple[str | None, str, str | None, str]:
     """The model this Claude Code session is on, and where that was read from.
 
     Neither the UserPromptSubmit payload nor any CLAUDE_* variable carries the model, so
@@ -97,14 +97,28 @@ def _resolve_claude_model(
     of the answer: the transcript describes the previous turn, a pinned setting describes
     every turn, and the two can disagree after a mid-session /model change.
     """
-    transcript_model = claude_model_from_transcript(payload.get("transcript_path"))
+    transcript_model, transcript_effort = claude_last_turn(payload.get("transcript_path"))
+    # CLAUDE_EFFORT is documented for hook commands but is populated from a tool-use
+    # context; a UserPromptSubmit hook does not get one.  Measuring it from inside a
+    # session of the same tool showed a value that had simply been inherited from the
+    # parent session, so the transcript is the source that survives that check.
+    TRANSCRIPT = "last turn, from the session transcript"
+    environment_effort = _current_effort()
+    effort = environment_effort or transcript_effort
+    # Model and effort can come from different places, so each carries its own label
+    # rather than borrowing the other's - a value shown under the wrong provenance is
+    # worse than one shown with none.
+    effort_source = "CLAUDE_EFFORT" if environment_effort else (TRANSCRIPT if transcript_effort else "")
     if transcript_model:
         alias = claude_alias_for_model(transcript_model, config)
-        return (alias or transcript_model), "last turn, from the session transcript"
-    pinned, _ = load_current_claude_config()
+        return (alias or transcript_model), TRANSCRIPT, effort, effort_source
+    pinned, pinned_effort = load_current_claude_config()
     if pinned:
-        return pinned, "pinned in settings.json"
-    return None, ""
+        settings_effort = (pinned_effort or "").strip().upper() or None
+        if not effort and settings_effort:
+            effort, effort_source = settings_effort, "pinned in settings.json"
+        return pinned, "pinned in settings.json", effort, effort_source
+    return None, "", effort, effort_source
 
 
 def _current_effort() -> str | None:
@@ -171,10 +185,7 @@ def _prune_approvals(root: Path, ttl_seconds: int) -> None:
             continue
 
 
-def _store_approval(
-    path: Path, selection: Selection, result: ScoreResult, ttl_seconds: int = 600,
-) -> None:
-    _prune_approvals(path.parent.parent, ttl_seconds)
+def _store_approval(path: Path, selection: Selection, result: ScoreResult) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "created_at": time.time(),
@@ -191,6 +202,7 @@ def _recommendation_reason(
     current_model: str | None, recommendation: Recommendation, result: ScoreResult, debug: bool,
     provider: str = "codex", provider_label: str = "Codex", reasoning_label: str = "Reasoning",
     current_effort: str | None = None, current_source: str = "", advisory: bool = False,
+    effort_source: str = "",
 ) -> str:
     selection: Selection = recommendation.selection
     recommended = selection.model.display_name if selection.model else "KEEP CURRENT"
@@ -201,8 +213,10 @@ def _recommendation_reason(
         else current_model
         or "UNKNOWN (first prompt of the session; pin one in settings.json to always show it)"
     )
-    effort_line = current_effort or (
-        f"UNKNOWN ({provider_label} does not expose the session effort to this hook)"
+    effort_line = (
+        f"{current_effort} ({effort_source})" if current_effort and effort_source
+        else current_effort
+        or f"UNKNOWN (first prompt of the session; {provider_label} sends no effort to this hook)"
     )
     lines = [
         "Adaptive Model Router",
@@ -272,21 +286,30 @@ def evaluate_hook(
         return {"continue": True}
 
     approval_path = _approval_path(session_id, prompt, provider)
-    if _consume_approval(approval_path, int(hook_config.get("approval_ttl_seconds", 600))):
+    ttl_seconds = int(hook_config.get("approval_ttl_seconds", 600))
+    # Sweep before consuming, and on every routed prompt rather than only when an approval
+    # is written: ADVISE mode never writes one, so a surface left on advise would keep
+    # whatever an earlier BLOCK spell left behind for good.  Expired entries cannot be
+    # consumed anyway, so removing them first changes nothing a fresh approval relies on.
+    _prune_approvals(approval_path.parent.parent, ttl_seconds)
+    if _consume_approval(approval_path, ttl_seconds):
         return {"continue": True}
 
     result = score_prompt(prompt, router_config)
     if provider == "claude":
         # Claude Code's hook payload carries no "model" field, unlike the patched
         # Codex build; the running model has to be read from its own settings file.
-        current_model, current_source = _resolve_claude_model(payload, router_config)
+        current_model, current_source, claude_effort, effort_source = _resolve_claude_session(
+            payload, router_config,
+        )
         # Same family resolution as the CLI path: the per-profile model pins live on the
         # family, so routing without it silently degrades to catalog order.
         active_family = default_family(router_config, provider) or LEGACY_FAMILY
         catalogs = {active_family: load_claude_catalog(config=router_config)}
     else:
         current_model = str(payload.get("model", "")).strip() or None
-        current_source = ""
+        claude_effort = None
+        current_source = effort_source = ""
         active_family, catalogs = resolve_active_catalogs(router_config, current_model)
     recommendation = recommend(
         catalogs,
@@ -298,7 +321,7 @@ def evaluate_hook(
         current_model=current_model,
         force_current=result.keep_current_model,
     )
-    current_effort = _current_effort() if provider == "claude" else None
+    current_effort = claude_effort if provider == "claude" else None
     # Nothing to confirm when the session is already on the recommendation: blocking here
     # costs a round trip and teaches the user that the screen carries no information.
     if _already_recommended(current_model, current_effort, recommendation.selection):
@@ -326,16 +349,13 @@ def evaluate_hook(
         current_model, recommendation, result, bool(hook_config.get("debug", False)),
         provider, str(provider_config.get("label", provider.title())),
         str(provider_config.get("reasoning_label", "Reasoning")),
-        current_effort, current_source, advisory=mode == ADVISE,
+        current_effort, current_source, advisory=mode == ADVISE, effort_source=effort_source,
     )
     if mode == ADVISE:
         # A surface with no approval step still benefits from the recommendation; it just
         # must not be interrupted for it.  No approval is stored: nothing was withheld.
         return {"continue": True, "systemMessage": reason}
-    _store_approval(
-        approval_path, recommendation.selection, result,
-        int(hook_config.get("approval_ttl_seconds", 600)),
-    )
+    _store_approval(approval_path, recommendation.selection, result)
     return {"decision": "block", "reason": reason}
 
 

@@ -14,7 +14,7 @@
   "hook": {
     "approval_ttl_seconds": 600, "debug": false,
     "claude_modes": {
-      "cli": "block", "ssh-remote": "block", "claude-coworker-terminal": "block",
+      "cli": "advise", "ssh-remote": "block", "claude-coworker-terminal": "block",
       "claude-desktop": "advise", "claude-desktop-3p": "advise", "claude-vscode": "advise",
       "*": "off"
     }
@@ -73,7 +73,7 @@
     },
     {
       "id": "analysis_and_implementation", "label": "analysis and implementation", "score": 2, "model_score": 3,
-      "all_of": [["분석", "원인", "검토", "확인"], ["수정", "구현", "개선해줘", "개선하고", "개선한 뒤", "적용", "리팩터링"]]
+      "all_of": [["분석", "원인", "검토", "확인", "analyze", "analysis"], ["수정", "구현", "고쳐", "고치", "fix", "개선해줘", "개선하고", "개선한 뒤", "적용", "리팩터링"]]
     },
     {
       "id": "verification_required", "label": "testing or verification required", "score": 1, "model_score": 1,
@@ -82,7 +82,7 @@
     {
       "id": "high_impact_operation", "label": "high-impact operation", "score": 9, "model_score": 10, "risk_floor": "HIGH",
       "literal_mentions": ["security라는 단어", "security 단어", "security 문자열", "보안이라는 단어", "보안 단어", "production이라는 문자열"],
-      "any_of": ["db migration", "database migration", "스키마 마이그레이션", "production config", "운영 설정", "운영 서버", "운영 db", "production deploy", "production", "프로덕션", "prod deploy", "백업을 삭제", "백업 삭제", "대량 삭제", "권한 변경", "인증 변경", "보안 코드", "보안 취약점", "security", "destructive"]
+      "any_of": ["db migration", "database migration", "스키마 마이그레이션", "production config", "운영 설정", "운영 서버", "운영 db", "실서버", "실 서버", "라이브 서버", "실제 서버", "production deploy", "production", "프로덕션", "prod deploy", "배포해", "배포 해", "백업을 삭제", "백업 삭제", "대량 삭제", "전부 지워", "모두 지워", "db 초기화", "데이터베이스 초기화", "테이블 삭제", "테이블 드롭", "drop table", "권한 변경", "인증 변경", "보안 코드", "보안 취약점", "security", "destructive"]
     },
     {
       "id": "mechanical_wide_edit", "label": "mechanical change across a broad scope", "score": -4, "model_score": 7, "confidence_conflict": false,

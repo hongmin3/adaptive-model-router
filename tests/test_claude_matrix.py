@@ -690,13 +690,20 @@ class ClaudeHookMatrixTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.config = load_config(PACKAGED_CONFIG)
 
-    def _evaluate(self, payload: dict, directory: str, current_model: str | None = "sonnet") -> dict:
+    def _evaluate(
+        self, payload: dict, directory: str, current_model: str | None = "sonnet",
+        mode: str = "block",
+    ) -> dict:
         # tests/__init__.py clears CLAUDE_CODE_ENTRYPOINT for the whole suite, so an unset
-        # variable here means "terminal", which is Claude Code's own default reading.
+        # variable here means "terminal", which is Claude Code's own default reading.  The
+        # mode is stated rather than inherited from the shipped configuration: a test of
+        # the blocking path that silently follows the default stops testing it the day the
+        # default changes, which is exactly what happened when the terminal moved to advise.
+        config = dict(self.config, hook=dict(self.config["hook"], claude_modes={"cli": mode}))
         with patch.dict("os.environ", {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory}), patch(
             "adaptive_model_router.hook.load_current_claude_config", return_value=(current_model, None),
         ):
-            return evaluate_hook(payload, self.config, provider="claude")
+            return evaluate_hook(payload, config, provider="claude")
 
     def test_a_user_prompt_is_blocked_with_the_recommended_tier(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -719,7 +726,8 @@ class ClaudeHookMatrixTests(unittest.TestCase):
 
     def test_an_expired_approval_blocks_again(self) -> None:
         payload = {"session_id": "s", "prompt": "README 오타 수정해줘", "source": "user"}
-        expired = dict(self.config, hook=dict(self.config["hook"], approval_ttl_seconds=0))
+        expired = dict(self.config, hook=dict(
+            self.config["hook"], approval_ttl_seconds=0, claude_modes={"cli": "block"}))
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             "os.environ", {"ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory}
         ), patch("adaptive_model_router.hook.load_current_claude_config", return_value=("sonnet", None)):
@@ -812,12 +820,19 @@ class ClaudeHookMatrixTests(unittest.TestCase):
             # A surface Anthropic adds later is not in the allow-list, so it is left alone.
             "some-future-surface": "continue",
         }
+        modes = dict(self.config["hook"]["claude_modes"], **{"cli": "block"})
+        config = dict(self.config, hook=dict(self.config["hook"], claude_modes=modes))
         for entrypoint, expected in cases.items():
             with self.subTest(entrypoint=entrypoint), tempfile.TemporaryDirectory() as directory:
-                with patch.dict("os.environ", {"CLAUDE_CODE_ENTRYPOINT": entrypoint}):
-                    response = self._evaluate(
+                with patch.dict(
+                    "os.environ",
+                    {"CLAUDE_CODE_ENTRYPOINT": entrypoint, "ADAPTIVE_MODEL_ROUTER_STATE_DIR": directory},
+                ), patch(
+                    "adaptive_model_router.hook.load_current_claude_config", return_value=("sonnet", None),
+                ):
+                    response = evaluate_hook(
                         {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
-                        directory,
+                        config, provider="claude",
                     )
                 self.assertEqual(expected, response.get("decision", "continue"))
 
@@ -982,7 +997,8 @@ class ClaudeHookMatrixTests(unittest.TestCase):
                 "adaptive_model_router.hook.load_current_claude_config", return_value=("sonnet", None),
             ):
                 response = evaluate_hook(
-                    {"session_id": "s", "prompt": "API 연동 기능 구현해줘"}, self.config, provider="claude",
+                    {"session_id": "s", "prompt": "API 연동 기능 구현해줘"},
+                    self._with_modes(**{"cli": "block"}), provider="claude",
                 )
         self.assertEqual("block", response["decision"])
 
@@ -1012,7 +1028,7 @@ class ClaudeHookMatrixTests(unittest.TestCase):
         ), patch("adaptive_model_router.hook.load_current_claude_config", return_value=("sonnet", None)):
             response = evaluate_hook(
                 {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
-                self.config, provider="claude",
+                self._with_modes(**{"cli": "block", "claude-desktop": "advise"}), provider="claude",
             )
         self.assertIn("Current Effort: MAX", response["reason"])
 
@@ -1025,7 +1041,7 @@ class ClaudeHookMatrixTests(unittest.TestCase):
             ):
                 response = evaluate_hook(
                     {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
-                    self.config, provider="claude",
+                    self._with_modes(**{"cli": "block"}), provider="claude",
                 )
         self.assertIn("Current Effort: UNKNOWN", response["reason"])
 
@@ -1134,7 +1150,7 @@ class ClaudeHookMatrixTests(unittest.TestCase):
         ):
             response = evaluate_hook(
                 {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
-                self.config, provider="claude",
+                self._with_modes(**{"cli": "block", "claude-desktop": "advise"}), provider="claude",
             )
         self.assertTrue(response["continue"])
         self.assertIn("KEEP CURRENT", response["systemMessage"])

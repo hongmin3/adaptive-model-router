@@ -103,15 +103,17 @@ Claude Code 2.1.274에서 실제 Hook 호출을 캡처해 확인한 결과입니
 
 | | 얻을 수 있나 | 출처 |
 |---|---|---|
-| 현재 **Effort** | **가능** | `CLAUDE_EFFORT` 환경변수 (`max` 등). Claude Code가 모든 Hook 명령에 내려줍니다 |
-| 현재 **모델** | **가능** | Hook payload가 주는 `transcript_path`의 마지막 assistant 항목 (`message.model`) |
+| 현재 **모델** | **가능** | `transcript_path`의 마지막 assistant 항목 `message.model` |
+| 현재 **Effort** | **가능** | 같은 항목의 `effort` 키 |
 
 ```
 Current Model: sonnet (last turn, from the session transcript)
-Current Effort: MAX
+Current Effort: HIGH (last turn, from the session transcript)
 ```
 
-`UserPromptSubmit`의 payload 키는 `session_id`, `transcript_path`, `cwd`, `prompt`, `prompt_id`, `permission_mode`, `scratchpad_dir`, `hook_event_name`이 전부입니다. **모델 필드는 없고**, Hook 프로세스가 받는 26개 `CLAUDE_*` 환경변수에도 모델은 없습니다(전수 확인). `effort`도 payload에는 없지만 `CLAUDE_EFFORT`로 노출됩니다.
+`UserPromptSubmit`의 payload 키는 `session_id`, `transcript_path`, `cwd`, `prompt`, `prompt_id`, `permission_mode`, `scratchpad_dir`, `hook_event_name`이 전부입니다. **모델도 effort도 payload에 없습니다.**
+
+> **`CLAUDE_EFFORT`는 쓸 수 없습니다.** CLI 문서에는 "모든 Hook 명령에 내려준다"고 적혀 있지만, 실제로는 tool-use 컨텍스트 Hook(`PreToolUse` 등)에서만 채워지고 `UserPromptSubmit`에는 오지 않습니다. 이 프로젝트에서 한때 "가능"이라고 문서화했던 적이 있는데, 그 측정이 **Claude Code 세션 안에서 수행돼 부모 세션의 `CLAUDE_EFFORT`가 자식에게 상속된 값을 본 것**이었습니다. 실제 터미널 세션에서는 `UNKNOWN`으로 나왔고 그게 맞습니다. 환경변수가 있으면 여전히 우선 사용하되, 없을 때 transcript로 떨어집니다.
 
 그래서 모델은 **세션 transcript**에서 읽습니다. Claude Code는 모든 Hook에 `transcript_path`를 넘기고, transcript의 assistant 항목마다 실제 사용 모델이 `claude-sonnet-5` 같은 ID로 기록돼 있습니다. Router는 파일 끝 256KB만 역방향으로 훑어 마지막 항목을 찾고(67MB 파일에서 약 2.5ms), 그 ID를 tier alias(`sonnet`)로 바꿔 추천과 비교합니다. alias로 바꾸는 이유는, 그러지 않으면 이미 맞는 등급에 있는 세션에게 같은 등급으로 바꾸라고 하게 되기 때문입니다.
 
@@ -221,8 +223,8 @@ $env:ADAPTIVE_MODEL_ROUTER_ENABLED = "0"
 
 | 모드 | 동작 | 적합한 화면 |
 |---|---|---|
-| `block` | Prompt를 한 번 막고 승인을 받음 | 터미널 |
-| `advise` | **막지 않고** 추천만 알림으로 보여줌 | 데스크톱 앱, VS Code |
+| `block` | Prompt를 한 번 막고 승인을 받음 | 승인 절차를 원할 때 (기본값 아님) |
+| `advise` | **막지 않고** 추천만 알림으로 보여줌 | 터미널, 데스크톱 앱, VS Code (기본값) |
 | `off` | 아무 말도 안 함 | SDK, 자동화, 모르는 화면 |
 
 기본값:
@@ -230,7 +232,7 @@ $env:ADAPTIVE_MODEL_ROUTER_ENABLED = "0"
 ```json
 "hook": {
   "claude_modes": {
-    "cli": "block", "ssh-remote": "block", "claude-coworker-terminal": "block",
+    "cli": "advise", "ssh-remote": "block", "claude-coworker-terminal": "block",
     "claude-desktop": "advise", "claude-desktop-3p": "advise", "claude-vscode": "advise",
     "*": "off"
   }
@@ -450,7 +452,7 @@ py .\run_tests.py -v
 
 `py -m unittest discover -s tests`로 직접 돌리지 마세요. 그 형태는 `adaptive_model_router`를 `sys.path`에서 찾으므로, 이미 설치된 사본이 있으면 작업 중인 `src/`가 아니라 **그 설치본이 검사 대상**이 됩니다. 그 상태에서는 새로 추가한 테스트만 실패하고 나머지는 통과해서, 빌드가 잘못됐다는 사실이 "새 테스트가 잘못됐다"처럼 보입니다. `run_tests.py`는 `src/`를 앞에 넣고, `tests/test_environment.py`가 어떤 경로로 실행하든 이 조건을 다시 검사해 어긋나면 실행 방법까지 알려주며 실패합니다.
 
-현재 회귀 묶음은 한국어·영어와 단순 편집, 구현, 진단, 광범위 분석, 다중 파일 작업, 위험 작업, 문자열 인용, 명시적 effort 지시를 포함한 **100개 프롬프트**를 검사합니다. 그중 29개는 프로필·reasoning에서 멈추지 않고 실제 Claude alias와 effort까지 확인하며, 프로필 4종 × reasoning 6단계를 모두 덮는지도 테스트가 스스로 검사합니다. 전체 테스트는 **137개**이고, 실행 파일 tier 추출은 실제 222MB 바이너리 대신 합성 fixture로 검사하므로 결과가 이 PC의 설치 상태에 좌우되지 않습니다.
+현재 회귀 묶음은 한국어·영어와 단순 편집, 구현, 진단, 광범위 분석, 다중 파일 작업, 위험 작업, 문자열 인용, 명시적 effort 지시를 포함한 **100개 프롬프트**를 검사합니다. 그중 29개는 프로필·reasoning에서 멈추지 않고 실제 Claude alias와 effort까지 확인하며, 프로필 4종 × reasoning 6단계를 모두 덮는지도 테스트가 스스로 검사합니다. 전체 테스트는 **149개**이고, 실행 파일 tier 추출은 실제 222MB 바이너리 대신 합성 fixture로 검사하므로 결과가 이 PC의 설치 상태에 좌우되지 않습니다.
 
 ## 제거
 

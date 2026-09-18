@@ -50,8 +50,11 @@ class HookTests(unittest.TestCase):
             "adaptive_model_router.hook.load_claude_catalog",
             return_value=CatalogResult("AVAILABLE", (model,)),
         ):
-            first = evaluate_hook(payload, load_config(PACKAGED_CONFIG), provider="claude")
-            second = evaluate_hook(payload, load_config(PACKAGED_CONFIG), provider="claude")
+            config = load_config(PACKAGED_CONFIG)
+            # The shipped terminal mode is advise; this test is about the blocking path.
+            config = dict(config, hook=dict(config["hook"], claude_modes={"cli": "block"}))
+            first = evaluate_hook(payload, config, provider="claude")
+            second = evaluate_hook(payload, config, provider="claude")
         self.assertEqual("block", first["decision"])
         self.assertIn("Claude Code", first["reason"])
         self.assertEqual({"continue": True}, second)
