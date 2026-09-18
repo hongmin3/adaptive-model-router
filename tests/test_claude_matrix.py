@@ -782,7 +782,7 @@ class ClaudeHookMatrixTests(unittest.TestCase):
                 {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "transcript_path": ""},
                 directory, current_model=None,
             )
-        self.assertIn("Current Model: UNKNOWN (first prompt of the session", response["reason"])
+        self.assertIn("Current Model: UNKNOWN (first prompt of the session", response["systemMessage"])
 
     def test_a_session_already_on_the_right_tier_is_told_to_keep_it(self) -> None:
         """Resolving to an alias is what makes this comparison possible at all."""
@@ -874,7 +874,9 @@ class ClaudeHookMatrixTests(unittest.TestCase):
             self.assertEqual([], list(Path(directory).rglob("*.json")))
 
     def test_an_unnamed_surface_falls_back_to_the_configured_default(self) -> None:
-        for fallback, expected in (("off", "continue"), ("advise", "continue"), ("block", "block")):
+        # "block" downgrades to advice with no known current model, so what is under test
+        # is which mode was selected, observable as whether a systemMessage came back.
+        for fallback, expected in (("off", "continue"), ("advise", "continue"), ("block", "continue")):
             with self.subTest(fallback=fallback), tempfile.TemporaryDirectory() as directory:
                 config = self._with_modes(**{"*": fallback})
                 with patch.dict(
@@ -900,6 +902,51 @@ class ClaudeHookMatrixTests(unittest.TestCase):
                 {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘"}, config, provider="claude",
             )
         self.assertEqual({"continue": True}, response)
+
+    def test_a_prompt_with_no_routing_evidence_advises_instead_of_blocking(self) -> None:
+        """Observed live: three conversational prompts in a row, each blocked, each
+        recommending haiku/low for the stated reason "no matching routing evidence".
+        A confirmation screen that cannot say why is the worst possible interruption."""
+        with tempfile.TemporaryDirectory() as directory, _patch_discovery(), patch.dict(
+            "os.environ", {"CLAUDE_EFFORT": "MAX"},
+        ):
+            transcript = self._transcript(directory, "claude-sonnet-5")
+            response = self._evaluate(
+                {"session_id": "s", "prompt": "지금 이게 무슨 상황이야?", "transcript_path": transcript},
+                directory, current_model=None,
+            )
+        self.assertTrue(response["continue"])
+        self.assertNotIn("decision", response)
+        self.assertIn("no matching routing evidence", response["systemMessage"])
+
+    def test_evidence_and_a_known_current_setting_still_block(self) -> None:
+        """The gate narrows blocking; it must not remove it."""
+        with tempfile.TemporaryDirectory() as directory, _patch_discovery(), patch.dict(
+            "os.environ", {"CLAUDE_EFFORT": "LOW"},
+        ):
+            transcript = self._transcript(directory, "claude-haiku-4-5")
+            response = self._evaluate(
+                {"session_id": "s", "prompt": "전체 프로젝트 보안 취약점을 점검하고 수정해줘",
+                 "transcript_path": transcript},
+                directory, current_model=None,
+            )
+        self.assertEqual("block", response["decision"])
+        self.assertIn("Recommended: fable", response["reason"])
+
+    def test_a_bypass_phrase_passes_without_reproducing_an_earlier_prompt(self) -> None:
+        """The approval needs byte-identical text, which a user who rephrases can never
+        produce - and rephrasing is exactly what happens when an unexpected screen appears."""
+        for phrase in ("라우터 꺼", "router off", "그냥 해"):
+            with self.subTest(phrase=phrase), tempfile.TemporaryDirectory() as directory, \
+                    _patch_discovery(), patch.dict("os.environ", {"CLAUDE_EFFORT": "LOW"}):
+                transcript = self._transcript(directory, "claude-haiku-4-5")
+                response = self._evaluate(
+                    {"session_id": "s",
+                     "prompt": f"{phrase} 전체 프로젝트 보안 취약점을 점검하고 수정해줘",
+                     "transcript_path": transcript},
+                    directory, current_model=None,
+                )
+                self.assertEqual({"continue": True}, response)
 
     def test_a_session_already_on_the_recommendation_is_not_interrupted(self) -> None:
         """Blocking to confirm what is already set teaches the user the screen is noise."""
@@ -1000,16 +1047,19 @@ class ClaudeHookMatrixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual({"continue": True}, self._evaluate({"session_id": "s", "prompt": "   "}, directory))
 
-    def test_an_unpinned_session_model_still_routes(self) -> None:
-        """settings.json carries a model only when the user pinned one."""
+    def test_an_unknown_current_model_advises_instead_of_blocking(self) -> None:
+        """A block prevents the turn that would record the model, so a session blocked on
+        its first prompt can never learn it: the state that would end the blocking is the
+        one blocking prevents.  Observed live as a terminal session with zero turns."""
         with tempfile.TemporaryDirectory() as directory:
             response = self._evaluate(
                 {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
                 directory, current_model=None,
             )
-        self.assertEqual("block", response["decision"])
-        self.assertIn("Current Model: UNKNOWN", response["reason"])
-        self.assertIn("Recommended: opus", response["reason"])
+        self.assertTrue(response["continue"])
+        self.assertNotIn("decision", response)
+        self.assertIn("Current Model: UNKNOWN", response["systemMessage"])
+        self.assertIn("Recommended: opus", response["systemMessage"])
 
     def test_the_block_message_names_no_counterpart_for_claude(self) -> None:
         """Claude Code has one family; a comparison row would be inventing one."""
@@ -1058,9 +1108,15 @@ class ClaudeHookMatrixTests(unittest.TestCase):
             self.assertEqual({"continue": True}, self._evaluate(first, directory))
 
     def test_the_stored_approval_never_holds_the_prompt(self) -> None:
-        secret = "이 문장은 저장되면 안 되는 내용입니다"
-        with tempfile.TemporaryDirectory() as directory:
-            self._evaluate({"session_id": "s", "prompt": secret, "source": "user"}, directory)
+        # Needs a run that actually blocks, which now requires a known current model and
+        # a matched rule; otherwise nothing is stored and the test proves nothing.
+        secret = "이 문장은 저장되면 안 되는 프로젝트 전체를 분석해줘"
+        with tempfile.TemporaryDirectory() as directory, _patch_discovery():
+            transcript = self._transcript(directory, "claude-haiku-4-5")
+            self._evaluate(
+                {"session_id": "s", "prompt": secret, "source": "user", "transcript_path": transcript},
+                directory,
+            )
             stored = "".join(path.read_text(encoding="utf-8") for path in Path(directory).rglob("*.json"))
         self.assertNotIn(secret, stored)
         self.assertEqual({"created_at", "recommended_model", "recommended_reasoning", "score"},
@@ -1080,8 +1136,8 @@ class ClaudeHookMatrixTests(unittest.TestCase):
                 {"session_id": "s", "prompt": "프로젝트 전체를 분석해줘", "source": "user"},
                 self.config, provider="claude",
             )
-        self.assertEqual("block", response["decision"])
-        self.assertIn("KEEP CURRENT", response["reason"])
+        self.assertTrue(response["continue"])
+        self.assertIn("KEEP CURRENT", response["systemMessage"])
 
 
 if __name__ == "__main__":

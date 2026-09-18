@@ -19,7 +19,7 @@ from .catalog import (
     resolve_active_catalogs,
 )
 from .config import load_config
-from .scorer import ScoreResult, score_prompt
+from .scorer import ScoreResult, _contains, score_prompt
 from .selector import Recommendation, Selection, recommend
 
 # A UserPromptSubmit hook also sees prompts the user never typed this turn - observed
@@ -264,6 +264,13 @@ def evaluate_hook(
         if source != "user":
             return {"continue": True}
 
+    if _contains(prompt, router_config.get("directives", {}).get("bypass", [])):
+        # An escape hatch that does not require reproducing an earlier prompt byte for
+        # byte: the block is answered by resubmitting identical text, which a user who
+        # rephrases the question can never satisfy, and rephrasing is what people do when
+        # a screen they did not expect appears.
+        return {"continue": True}
+
     approval_path = _approval_path(session_id, prompt, provider)
     if _consume_approval(approval_path, int(hook_config.get("approval_ttl_seconds", 600))):
         return {"continue": True}
@@ -296,6 +303,23 @@ def evaluate_hook(
     # costs a round trip and teaches the user that the screen carries no information.
     if _already_recommended(current_model, current_effort, recommendation.selection):
         return {"continue": True}
+
+    # Holding a prompt for confirmation is only defensible when the router can name a
+    # reason and can see that the session is not already set that way.  Two cases fail
+    # that test and were the bulk of real interruptions:
+    #
+    #  - No rule matched, so the recommendation is the low-confidence fallback and the
+    #    stated reason is literally "no matching routing evidence".  Every conversational
+    #    question lands here.
+    #  - The current model is unknown, so whether this is even a change is unknown.  A
+    #    block also prevents the turn that would have written the model to the transcript,
+    #    so a session blocked on its first prompt can never learn it - the state that
+    #    would end the blocking is the one blocking prevents.
+    #
+    # Both downgrade to advice rather than silence: the recommendation is still worth
+    # showing, it is just not worth stopping for.
+    if mode == BLOCK and (result.uncertain_default_used or not current_model):
+        mode = ADVISE
 
     provider_config = router_config.get("providers", {}).get(provider, {})
     reason = _recommendation_reason(

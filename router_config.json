@@ -37,7 +37,8 @@
       "XHIGH": ["reasoning xhigh", "xhigh로 해"],
       "MAX": ["reasoning max", "effort max", "max로 해", "최고 성능으로"],
       "ULTRA": ["reasoning ultra", "effort ultra", "ultra로 해"]
-    }
+    },
+    "bypass": ["라우터 꺼", "라우터 끄고", "router off", "그냥 해", "바로 해"]
   },
   "rules": [
     {
