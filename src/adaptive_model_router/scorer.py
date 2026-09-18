@@ -98,12 +98,36 @@ def score_prompt(prompt: str, config: dict[str, Any]) -> ScoreResult:
     ):
         matched_rules = [rule for rule in matched_rules if rule["id"] != "narrow_simple_edit"]
 
+    # Rules in the same `group` are alternative descriptions of one task, not independent
+    # evidence for a bigger one: "자동화 기능을 구현해줘" matches implementation, automation and
+    # feature-request at once and is still a single ordinary feature.  Summing them made
+    # every additional vocabulary rule inflate the tier of prompts it merely described
+    # better, so a group contributes its strongest member once.  Ungrouped rules stay
+    # additive, because scope and risk genuinely compound.
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for rule in matched_rules:
+        group = rule.get("group")
+        if group:
+            grouped.setdefault(str(group), []).append(rule)
+
+    counted: list[dict[str, Any]] = []
+    for rule in matched_rules:
+        group = rule.get("group")
+        if not group:
+            counted.append(rule)
+        elif rule is max(
+            grouped[str(group)],
+            key=lambda item: (int(item.get("model_score", item["score"])), int(item["score"])),
+        ):
+            counted.append(rule)
+
     for rule in matched_rules:
         delta = int(rule["score"])
-        score += delta
-        model_score += int(rule.get("model_score", delta))
+        if rule in counted:
+            score += delta
+            model_score += int(rule.get("model_score", delta))
         matches.append(Match(
-            rule["id"], rule["label"], delta,
+            rule["id"], rule["label"], delta if rule in counted else 0,
             bool(rule.get("confidence_conflict", True)),
         ))
         floor = rule.get("risk_floor")

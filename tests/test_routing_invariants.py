@@ -264,5 +264,132 @@ class EveryRuleIsReachableTests(unittest.TestCase):
                 self.assertIsInstance(rule.get("model_score", rule["score"]), int)
 
 
+# A user reporting that something does not work rarely uses the word "error".  Every rule
+# that recognised a fault required one of 오류 / 에러 / error / 버그 / 실패 to be present, so
+# the most ordinary bug report there is - "이게 안 되는데" - matched nothing and was routed
+# to the cheapest tier with the reason "no matching routing evidence".  Reported live from a
+# Codex session: a spreadsheet automation question got GPT-5.6-Luna / LOW.
+MALFUNCTION_PHRASINGS = (
+    "이 시트 자동화에서 종목별 증감분석 현황이 적히지 않는데 이유가 뭐야?",
+    "이 값이 안 적히는데 왜 그래?",
+    "버튼을 눌러도 아무 반응이 없어",
+    "결과가 안 나오는데 확인해줘",
+    "화면에 표시가 안 돼",
+    "스케줄이 동작하지 않아",
+    "반영이 안 되는데 원인 좀 찾아줘",
+    "데이터가 누락돼서 들어와",
+    "값이 빠져있어",
+    "저장이 안 됨",
+    "왜 아직 Stable로 남아있는거야?",
+    "자동 수집이 실행되지 않았어",
+    "목록이 비어있어",
+    "화면이 먹통이야",
+)
+
+# The same reports stripped of every other signal - no automation, no spreadsheet, no error
+# word - so the malfunction rule is the only thing that can classify them.  Without these
+# the corpus above passes even with the rule deleted, because its members carry a second
+# signal that classifies them for an unrelated reason.
+SYMPTOM_ONLY_PHRASINGS = (
+    "이 값이 기록되지 않아",
+    "메일이 발송되지 않는데 확인해줘",
+    "목록이 갱신되지 않습니다",
+    "알림이 오지 않음",
+    "버튼이 눌리지 않는데 왜 그럴까",
+)
+
+# The same words in a causative construction: the user is asking for something to be made
+# not to happen.  That is a feature request, not a fault report, and must not raise the tier
+# through the malfunction rule.
+CAUSATIVE_NOT_MALFUNCTION = (
+    "데스크톱앱에서는 작동 안되게 해주고 cli로만 실행되게 해줘",
+    "알림이 뜨지 않도록 해줘",
+    "자동 저장이 안 되게 해줘",
+)
+
+
+class MalfunctionReportTests(unittest.TestCase):
+    """"It isn't working" is the most common bug report and the least likely to say "error"."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.config = load_config(PACKAGED_CONFIG)
+
+    def test_every_symptom_phrasing_is_recognised_as_work(self) -> None:
+        for prompt in MALFUNCTION_PHRASINGS + SYMPTOM_ONLY_PHRASINGS:
+            with self.subTest(prompt=prompt):
+                scored = score_prompt(prompt, self.config)
+                self.assertFalse(
+                    scored.uncertain_default_used,
+                    f"{prompt!r} reports something not working and matched no rule, so it "
+                    "lands on the cheapest tier with no stated reason",
+                )
+
+    def test_every_symptom_phrasing_reaches_the_malfunction_rule_itself(self) -> None:
+        """Not merely "some rule matched": several of these carry a second signal, so a
+        corpus checked only for classification passes with the malfunction rule deleted."""
+        for prompt in MALFUNCTION_PHRASINGS + SYMPTOM_ONLY_PHRASINGS:
+            with self.subTest(prompt=prompt):
+                matched = [m.rule_id for m in score_prompt(prompt, self.config).matches]
+                self.assertIn(
+                    "malfunction_report", matched,
+                    f"{prompt!r} is a fault report but is classified by {matched} instead, so "
+                    "the same sentence about anything else would fall through",
+                )
+
+    def test_no_symptom_phrasing_is_routed_to_the_cheapest_tier(self) -> None:
+        """The defect the user reported was the tier, not the confidence."""
+        for prompt in MALFUNCTION_PHRASINGS + SYMPTOM_ONLY_PHRASINGS:
+            with self.subTest(prompt=prompt):
+                scored = score_prompt(prompt, self.config)
+                self.assertNotEqual(
+                    ("FAST", "LOW"), (scored.profile, scored.reasoning),
+                    f"{prompt!r} is a diagnosis request routed to the smallest model at the "
+                    "lowest effort",
+                )
+
+    def test_a_causative_negation_is_a_feature_request_not_a_fault(self) -> None:
+        for prompt in CAUSATIVE_NOT_MALFUNCTION:
+            with self.subTest(prompt=prompt):
+                matched = [m.rule_id for m in score_prompt(prompt, self.config).matches]
+                self.assertNotIn("malfunction_report", matched)
+
+    def test_a_fault_stated_with_and_without_the_word_error_routes_the_same(self) -> None:
+        """The tier must follow the task, not the vocabulary the user happened to reach for."""
+        pairs = (
+            ("로그인 오류의 원인을 조사해줘", "로그인이 안 되는데 원인 좀 조사해줘"),
+            ("저장 에러가 나는데 확인해줘", "저장이 안 되는데 확인해줘"),
+        )
+        for with_word, without_word in pairs:
+            with self.subTest(pair=(with_word, without_word)):
+                a = score_prompt(with_word, self.config)
+                b = score_prompt(without_word, self.config)
+                self.assertEqual((a.profile, a.reasoning), (b.profile, b.reasoning))
+
+
+class DiagnosisRulesDoNotStackTests(unittest.TestCase):
+    """bug_diagnosis and malfunction_report describe one thing two ways."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.config = load_config(PACKAGED_CONFIG)
+
+    def test_both_diagnosis_rules_share_a_group(self) -> None:
+        groups = {
+            rule["id"]: rule.get("group")
+            for rule in self.config["rules"]
+            if rule["id"] in ("bug_diagnosis", "malfunction_report")
+        }
+        self.assertEqual({"bug_diagnosis": "diagnosis", "malfunction_report": "diagnosis"}, groups)
+
+    def test_matching_both_counts_once(self) -> None:
+        prompt = "저장 오류가 나는데 저장이 되지 않는 원인을 조사해줘"
+        scored = score_prompt(prompt, self.config)
+        matched = {m.rule_id for m in scored.matches}
+        self.assertLessEqual({"bug_diagnosis", "malfunction_report"} & matched, matched)
+        single = score_prompt("저장 오류의 원인을 조사해줘", self.config)
+        self.assertEqual(single.profile, scored.profile)
+
+
 if __name__ == "__main__":
     unittest.main()

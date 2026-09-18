@@ -921,13 +921,17 @@ class ClaudeHookMatrixTests(unittest.TestCase):
     def test_a_prompt_with_no_routing_evidence_advises_instead_of_blocking(self) -> None:
         """Observed live: three conversational prompts in a row, each blocked, each
         recommending haiku/low for the stated reason "no matching routing evidence".
-        A confirmation screen that cannot say why is the worst possible interruption."""
+        A confirmation screen that cannot say why is the worst possible interruption.
+
+        The prompt is deliberately one no rule describes - the conversational shapes that
+        triggered this originally now match question_or_explanation, which is the fix for
+        a different half of the same complaint."""
         with tempfile.TemporaryDirectory() as directory, _patch_discovery(), patch.dict(
             "os.environ", {"CLAUDE_EFFORT": "MAX"},
         ):
             transcript = self._transcript(directory, "claude-sonnet-5")
             response = self._evaluate(
-                {"session_id": "s", "prompt": "지금 이게 무슨 상황이야?", "transcript_path": transcript},
+                {"session_id": "s", "prompt": "opaque task", "transcript_path": transcript},
                 directory, current_model=None,
             )
         self.assertTrue(response["continue"])

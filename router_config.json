@@ -29,7 +29,7 @@
     }
   },
   "directives": {
-    "keep_current_model": ["이 모델 그대로", "현재 모델 유지", "모델 바꾸지 마", "keep current model"],
+    "keep_current_model": ["이 모델 그대로", "현재 모델 유지", "모델 바꾸지 마", "keep current model", "계속 진행", "이어서 진행", "계속해줘", "이어서 해", "중단했던 부분", "하던 작업", "제안하는 순서대로", "continue from where you left off", "continue the task you were working on"],
     "reasoning": {
       "LOW": ["reasoning low", "low로 해", "사용량 아껴", "빠르게 해"],
       "MEDIUM": ["reasoning medium", "medium으로 해", "medium으로 실행"],
@@ -54,7 +54,7 @@
       "none_of": ["프로젝트 전체", "전체 구조", "모든 파일", "전수", "대규모", "여러 모듈", "근본 원인"]
     },
     {
-      "id": "normal_implementation",
+      "id": "normal_implementation", "group": "task-shape",
       "label": "general implementation",
       "score": 1,
       "model_score": 4,
@@ -163,12 +163,58 @@
       "none_of": ["복잡한 버그", "원인 불명", "근본 원인"]
     },
     {
-      "id": "bug_diagnosis",
+      "id": "bug_diagnosis", "group": "diagnosis",
       "label": "bug diagnosis",
       "score": 1,
       "model_score": 4,
       "all_of": [["오류", "에러", "error", "버그", "bug", "실패"], ["원인", "분석", "진단", "조사", "찾아", "확인", "investigate", "diagnose"]],
       "none_of": ["수정", "고쳐", "fix", "구현", "버그를 찾아", "버그가 뭐", "복잡한 버그", "원인 불명", "근본 원인"]
+    },
+    {
+      "id": "version_control", "group": "task-shape", "label": "version control work", "score": 1, "model_score": 3,
+      "any_of": ["커밋", "commit", "푸시", "푸쉬", "push", "깃 ", "git ", "저장소를", "저장소도", "저장소 ", "레파지토리", "리포지토리", "repository", "브랜치", "branch", "머지", "merge", "pull request", "revert", "rebase", "태그 달", "릴리스", "release"]
+    },
+    {
+      "id": "documentation_work", "group": "task-shape", "label": "documentation work", "score": 0, "model_score": 2,
+      "any_of": ["문서화", "사양서", "사용법", "사용안내", "사용 안내", "리드미", "readme", "md파일", "md 파일", "매뉴얼", "가이드 문서", "최신화", "주석을", "docstring", "changelog"]
+    },
+    {
+      "id": "automation_or_integration", "group": "task-shape", "label": "automation or integration", "score": 2, "model_score": 4,
+      "any_of": ["자동화", "크롤링", "스크래핑", "스케줄러", "스케줄 등록", "배치 작업", "웹훅", "webhook", "연동해", "연동을", "연동이", "integration", "인앱브라우저", "인앱 브라우저", "자동수집", "자동 수집", "자동실행", "자동 실행", "자동으로 수집", "메일을 보내"]
+    },
+    {
+      "id": "feature_request", "group": "task-shape", "label": "new feature request", "score": 2, "model_score": 3,
+      "any_of": ["기능을 넣", "기능 넣", "기능을 추가", "기능이 있으면", "만들어줘", "만들어 줘", "만들어줄", "만들어 주", "만들어달", "개발해줘", "개발해 줘", "개발해줄", "버튼을 만들", "버튼 만들", "그려줄", "그려줘", "넣어주면", "넣을 수 있게", "되도록 해", "되게 해", "할 수 있도록 해", "가능하도록 해", "안 되게 해", "안되게 해"]
+    },
+    {
+      "id": "data_or_spreadsheet_work", "group": "task-shape", "label": "data or spreadsheet work", "score": 2, "model_score": 3,
+      "any_of": ["스프레드시트", "구글 시트", "구글시트", "엑셀", "시트를", "시트에", "시트가", "시트도", "시트는", "수식화", "수식을", "피벗", "그래프", "차트", "csv", "원장에", "열에 ", "행에 ", "셀에 "]
+    },
+    {
+      "id": "workspace_reorganisation", "label": "workspace reorganisation", "score": 3, "model_score": 7,
+      "any_of": ["폴더 정리", "폴더를 정리", "폴더들은", "디렉터리 정리", "구조를 정리", "구조 정리", "하나로 묶", "하나로 병합", "저장소 병합", "프로젝트별로", "하위 기능으로", "이관", "정리가 가능"]
+    },
+    {
+      "id": "prompt_authoring", "group": "task-shape", "label": "prompt or handoff authoring", "score": 0, "model_score": 2,
+      "any_of": ["프롬프트를 만들", "프롬프트 만들", "프롬프트를 정리", "프롬프트로 만들", "프롬프트를 입력하면", "프롬프트 입력", "인수인계", "핸드오프", "handoff", "다른 채팅방에", "다른 pc에도"]
+    },
+    {
+      "id": "planning_or_roadmap", "group": "task-shape", "label": "planning or roadmap", "score": 2, "model_score": 4,
+      "any_of": ["고도화", "개선점", "개선할 부분", "로드맵", "남은 작업", "남아있는지", "해야할일", "해야 할 일", "할 일 정리", "다음 항목", "우선순위", "유저친화적", "사용자 친화"]
+    },
+    {
+      "id": "question_or_explanation", "label": "question or explanation", "score": -1, "model_score": -1, "confidence_conflict": false,
+      "any_of": ["뭐야", "뭔데", "뭔지", "왜 이래", "왜 그래", "왜 뜨", "왜 안", "왜 아직", "왜 자꾸", "어떻게 해야", "어떻게 하면", "어떻게 되는", "가능해?", "가능한거야", "불가능한거야", "될까?", "설명해줘", "무슨 상황", "어디에 입력", "방법이 뭐", "방법은 뭐", "이유가 뭐", "알려줘", "말해줘", "의견을 주"],
+      "none_of": ["구현해", "만들어줘", "개발해줘", "커밋", "배포"]
+    },
+    {
+      "id": "environment_or_hardware", "label": "local environment or hardware", "score": -1, "model_score": -1, "confidence_conflict": false,
+      "any_of": ["드라이버", "쿨링팬", "쿨링 팬", "그래픽 카드", "그래픽카드", "어댑터", "bios", "모니터 2대", "화면이 깨", "터미널 화면"]
+    },
+    {
+      "id": "malfunction_report", "label": "reported malfunction", "score": 1, "model_score": 4, "group": "diagnosis",
+      "any_of": ["안 적히", "안적히", "안 나오", "안나오", "안 돼", "안됨", "안 됨", "안 되는", "안되는", "안 뜨", "안 보여", "안 보임", "안 들어", "안 바뀌", "안 열려", "안 눌려", "안 실행", "안 돌아", "안 잡히", "안 먹", "반응이 없", "동작하지 않", "작동하지 않", "동작 안", "작동 안", "반영이 안", "표시가 안", "저장이 안", "실행되지 않", "생성되지 않", "적용되지 않", "되지 않은", "되지 않는", "지 않는데", "지 않아", "지 않음", "지 않습니다", "누락", "빠져있", "빠졌", "비어있", "이상해", "먹통", "멈춰있", "남아있는거", "그대로야", "계속 풀려"],
+      "none_of": ["안되게", "안 되게", "안 되도록", "안되도록", "않도록", "않게 해"]
     }
   ],
   "model_selection": {
