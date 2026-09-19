@@ -1,19 +1,8 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Adaptive Model Router <noreply@local>
-Date: Mon, 14 Sep 2026 11:30:04 +0900
-Subject: [PATCH] feat(tui): confirm local adaptive model routing
-
----
- codex-rs/tui/src/chatwidget.rs                |  39 ++++++++++++++++++++
- codex-rs/tui/src/chatwidget/constructor.rs    |   2 ++
- .../tui/src/chatwidget/input_submission.rs    | 163 ++++++++++++++++++++
- 3 files changed, 204 insertions(+)
-
 diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
-index 16d4a6e..dd663ef 100644
+index 4e34536..dc0979e 100644
 --- a/codex-rs/tui/src/chatwidget.rs
 +++ b/codex-rs/tui/src/chatwidget.rs
-@@ -797,6 +797,45 @@ pub(crate) struct ChatWidget {
+@@ -814,6 +814,46 @@ pub(crate) struct ChatWidget {
      external_editor_state: ExternalEditorState,
      last_rendered_user_message_display: Option<UserMessageDisplay>,
      last_non_retry_error: Option<(String, String)>,
@@ -28,6 +17,7 @@ index 16d4a6e..dd663ef 100644
 +    user_message: UserMessage,
 +    history_record: UserMessageHistoryRecord,
 +    shell_escape_policy: ShellEscapePolicy,
++    source: UserMessageSource,
 +    model: String,
 +    model_display_name: String,
 +    reasoning: ReasoningEffortConfig,
@@ -60,10 +50,10 @@ index 16d4a6e..dd663ef 100644
  
  #[cfg_attr(not(test), allow(dead_code))]
 diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
-index f45ae82..467ec0a 100644
+index e0be308..3adb68b 100644
 --- a/codex-rs/tui/src/chatwidget/constructor.rs
 +++ b/codex-rs/tui/src/chatwidget/constructor.rs
-@@ -269,6 +269,8 @@ impl ChatWidget {
+@@ -272,6 +272,8 @@ impl ChatWidget {
              external_editor_state: ExternalEditorState::Closed,
              last_rendered_user_message_display: None,
              last_non_retry_error: None,
@@ -73,12 +63,12 @@ index f45ae82..467ec0a 100644
  
          widget.prefetch_rate_limits();
 diff --git a/codex-rs/tui/src/chatwidget/input_submission.rs b/codex-rs/tui/src/chatwidget/input_submission.rs
-index 6e408aa..8f1c29b 100644
+index fdfe3f6..539bbf5 100644
 --- a/codex-rs/tui/src/chatwidget/input_submission.rs
 +++ b/codex-rs/tui/src/chatwidget/input_submission.rs
-@@ -113,6 +113,119 @@ impl ChatWidget {
-         history_record: UserMessageHistoryRecord,
+@@ -116,6 +116,122 @@ impl ChatWidget {
          shell_escape_policy: ShellEscapePolicy,
+         source: UserMessageSource,
      ) -> (bool, Option<AppCommand>) {
 +        if let Some(pending) = self.pending_adaptive_route.take() {
 +            match user_message.text.trim().to_ascii_lowercase().as_str() {
@@ -98,6 +88,7 @@ index 6e408aa..8f1c29b 100644
 +                        pending.user_message,
 +                        pending.history_record,
 +                        pending.shell_escape_policy,
++                        pending.source,
 +                    );
 +                }
 +                "n" | "no" => {
@@ -111,6 +102,7 @@ index 6e408aa..8f1c29b 100644
 +                        pending.user_message,
 +                        pending.history_record,
 +                        pending.shell_escape_policy,
++                        pending.source,
 +                    );
 +                }
 +                _ => {
@@ -186,6 +178,7 @@ index 6e408aa..8f1c29b 100644
 +                user_message,
 +                history_record,
 +                shell_escape_policy,
++                source,
 +                model,
 +                model_display_name: display_name,
 +                reasoning,
@@ -196,7 +189,7 @@ index 6e408aa..8f1c29b 100644
          if self.has_misalignment_policy_violation() {
              return (false, None);
          }
-@@ -467,6 +557,56 @@ impl ChatWidget {
+@@ -493,6 +609,56 @@ impl ChatWidget {
          (true, Some(op))
      }
  
