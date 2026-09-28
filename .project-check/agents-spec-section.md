@@ -1,35 +1,3 @@
-﻿# AGENTS.md — adaptive-model-router
-
-LLM 호출 없이 로컬 규칙으로 CLI 모델과 Reasoning을 추천하고 승인 후 실행하는 Hybrid Router
-
-## Akela Context
-
-Follow `akela/PROTOCOL.md` for every task.
-
-## Project Root 탐색
-
-이 프로젝트 하위 어디에서 작업하든(예: `src/`, `scripts/`, `tests/`) 먼저 현재 위치에서 상위로 `akela.json`을 탐색해 가장 가까운 Project Root를 식별하고, 그 Root의 `knowledge/`·`akela/PROTOCOL.md`를 사용한다. 하위 디렉터리에 별도 `akela.json`/`knowledge/`를 새로 만들지 않는다. 필요하면 `scripts/find-project-root.ps1`을 사용한다.
-
-이 프로젝트를 Workspace 밖에서 단독으로 Clone해도 이 파일과 `akela.json`/`knowledge/`만으로 동일하게 동작해야 한다 (상위 Workspace 경로에 대한 의존성 없음).
-
-<!-- readme-guidance: start -->
-## README 작성 기준
-
-- 처음 보는 사람이 **무엇을 해주는 프로젝트인지, 왜 필요한지, 어떻게 시작하는지** 이해할 수 있게 쓴다.
-- 첫 부분은 쉬운 한두 문장과 실제 사용 예로 설명한다. 전문 용어는 필요한 곳에서 풀어 쓴다.
-- 준비 사항 → 설치 → 첫 실행 → 기대 결과 순서의 **빠른 시작**을 앞에 둔다. 확인한 명령만 적는다.
-- 자세한 운영 규칙, 내부 구조, 검증 기록은 `docs/` 등 별도 문서에 두고 README에서 연결한다.
-- README는 현재 기능과 사용법을 설명한다. 세션별 작업 경과나 수정 내역을 길게 나열하지 않는다.
-- 구현과 README가 어긋나지 않게 함께 갱신한다. 미검증 기능·플랫폼·제한사항은 분명히 구분한다.
-- 기존 프로젝트의 기능·설정·민감정보·고유 문서 체계를 보존한다. 문서 정리를 이유로 실행 동작을 바꾸지 않는다.
-## 터미널 출력 언어
-
-- 사용자에게 보이는 터미널 출력(응답, 진행 보고, 질문, 완료 요약)은 **한국어**로 쓴다.
-- 명령어, 코드, 파일 경로, 식별자, 오류·로그 원문은 번역하지 않고 그대로 인용한 뒤 한국어로 설명한다.
-- 프로젝트가 만드는 프로그램의 출력 언어는 이 규칙이 아니라 그 프로젝트의 SPEC을 따른다.
-<!-- readme-guidance: end -->
-
-<!-- project-spec-guidance: start -->
 ## 사양 기반 개발 (SPEC)
 
 <!-- spec-workflow: v6 -->
@@ -150,14 +118,3 @@ CATEGORY는 대문자·숫자, NNN은 세 자리. 한 번 부여한 ID는 재사
 
 SPEC 내용을 `knowledge/`에 복제하지 않는다. knowledge는 Requirement ID를 **참조**만 한다
 (예: "REQ-EXPORT-001을 고칠 때 한글 파일명 encoding 회귀를 항상 확인한다").
-<!-- project-spec-guidance: end -->
-
-<!-- project-readiness-command: start -->
-## 프로젝트 완료 검사
-
-하위 폴더에서 작업을 시작했더라도 완료 전에는 이 프로젝트 루트로 이동하여 다음 명령을 실행한다.
-```text
-node .project-check/project-readiness.js .
-```
-검사 실패를 해결하거나 미완료로 보고한다. 이 검사는 문서와 경로 연결을 확인하며 프로젝트 자체 테스트와 실제 동작 검증을 대신하지 않는다.
-<!-- project-readiness-command: end -->
